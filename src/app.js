@@ -9,7 +9,8 @@
 import { N, BASE_SEC, BASE, nm } from "./data/lessons.js";
 import { esc, enc } from "./utils.js";
 import { uiConfirm, uiPrompt, uiAlert } from "./ui/dialogs.js";
-import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen } from "./platform.js";
+import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment } from "./platform.js";
+import { parseWorkbook, pickRandom } from "./examBank.js";
 
 const LOGO_FULL="/logo-full.jpg";
 let SEC=BASE_SEC.map(s=>s.slice());
@@ -108,7 +109,7 @@ gg:l=>`https://www.google.com/search?tbm=isch&q=${enc(l.kw+" узел схема
 
 /* ================= ПЛАТФОРМА: общая база, роли ================= */
 const P={db:null,user:null,assets:null,dl:null,uid:null,canEdit:false,ready:false,authed:false,dataReady:false,writeFail:false};
-let CFG={seq:true},OVR={},CSEC={},ACC=null;
+let CFG={seq:true},OVR={},CSEC={},ACC=null,EXAMBANK={};
 const KEY="tnSchool.v2";
 const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{}});
 let st=blank();
@@ -152,13 +153,16 @@ function softRender(force){
   if(busy){const b=document.getElementById("upd");b.classList.remove("hidden")}
   else if(["","s","video","norms","des","progress","mentor"].includes(p)||(p==="l"&&isMentor()))render();
 }
+let authUidInFlight=null;
 function initPlatform(){
   onAuthChange(async session=>{
     if(!session){
+      authUidInFlight=null;
       P.ready=true;P.authed=false;P.dataReady=false;P.db=null;P.user=null;P.uid=null;P.canEdit=false;P.assets=null;P.dl=null;
       render();return;
     }
-    if(P.authed&&P.uid===session.user.id)return;
+    if(authUidInFlight===session.user.id)return;
+    authUidInFlight=session.user.id;
     P.db=platformDb;P.user=platformUser;P.uid=session.user.id;P.assets=platformAssets;P.dl=platformDownloads;
     P.canEdit=await platformUser.canEdit();
     P.authed=true;P.ready=true;
@@ -169,6 +173,7 @@ function initPlatform(){
     P.db.collection("cms/main/lessons").onSnapshot(s=>{OVR={};s.docs.forEach(d=>{OVR[d.id]=clone(d.data())});rebuild();fin()},()=>fin());
     P.db.doc("cms/main/access/"+P.uid).onSnapshot(s=>{ACC=s.exists?clone(s.data()):null;rebuild();if(firstSnaps>=3)softRender()},()=>{});
     P.db.collection("cms/main/sections").onSnapshot(s=>{CSEC={};s.docs.forEach(d=>{CSEC[d.id]=clone(d.data())});rebuild();fin()},()=>fin());
+    P.db.doc("cms/main/examBank").onSnapshot(s=>{EXAMBANK=s.exists?clone(s.data()):{};if(firstSnaps>=3)softRender()},()=>{});
     render();
   });
 }
@@ -188,7 +193,7 @@ function registerPage(){
   const p=st.prof||{};
   return `<div class="blk" style="max-width:640px;margin:20px auto">
   <h1 style="font-size:clamp(22px,4vw,30px);margin-bottom:6px">Добро пожаловать в Школу ТН ЖК</h1>
-  <p class="mut">Укажите свои данные. Они фиксируются в журнале обучения вместе с датами прохождения уроков, тестов и аттестаций.</p>
+  <p class="mut">Укажите свои данные. Они фиксируются в журнале обучения вместе с датами прохождения лекций, тестов и аттестаций.</p>
   <div class="form">
    <label>ФИО<input class="inp" id="rf" value="${esc(p.fio||"")}" placeholder="Иванов Иван Иванович" autocomplete="name"></label>
    <label>Специальность<input class="inp" id="rs" list="specs" value="${esc(p.spec||"")}" placeholder="Выберите или впишите"></label>
@@ -204,8 +209,8 @@ function secPage(k){
   const ls=LS.filter(l=>l.s===k);if(!SEC.some(s=>s[0]===k))return notFound();
   return `<div class="crumbs"><a href="#/">Разделы</a> / ${esc(secName(k))}</div>
   <h1 style="font-size:clamp(24px,4vw,36px);margin-bottom:6px">${k}. ${esc(secName(k))}</h1>
-  <p class="mut">${ls.length} уроков. Урок осваивается, когда пройдены все шаги, найдены все дефекты, верно составлено замечание DES и сдан блиц-тест (от 80 %). Раздел закрыт, когда освоены все его уроки.</p>${secMastered(k)?`<p><span class="pill ok">Раздел освоен</span></p>`:""}
-  <div class="lcards">${ls.map(l=>{const lk2=locked(l),x=st.lp[l.id]||{};return `<a class="lcard ${lk2?"is-locked":""}" href="#/l/${l.id}">${cleanFig(l)}<div class="bd"><b>Урок ${l.id}</b><div style="font-weight:700;margin:4px 0">${esc(l.t)}</div><span class="pill ${isDone(l.id)?"ok":""}">${lk2?"Закрыт — пройдите предыдущий":isDone(l.id)?`Освоен ${fdd(x.p)}`:x.o?"В процессе":"Не начат"}${x.q!=null?` · тест ${x.q}%`:""}</span></div></a>`}).join("")||`<p class="mut">В разделе пока нет уроков.</p>`}</div>`;
+  <p class="mut">${ls.length} лекций. Лекция осваивается, когда пройдены все шаги, найдены все дефекты, верно составлено замечание DES и сдан блиц-тест (от 80 %). Раздел закрыт, когда освоены все его лекции.</p>${secMastered(k)?`<p><span class="pill ok">Раздел освоен</span></p>`:""}
+  <div class="lcards">${ls.map(l=>{const lk2=locked(l),x=st.lp[l.id]||{};return `<a class="lcard ${lk2?"is-locked":""}" href="#/l/${l.id}">${cleanFig(l)}<div class="bd"><b>Лекция ${l.id}</b><div style="font-weight:700;margin:4px 0">${esc(l.t)}</div><span class="pill ${isDone(l.id)?"ok":""}">${lk2?"Закрыт — пройдите предыдущий":isDone(l.id)?`Освоен ${fdd(x.p)}`:x.o?"В процессе":"Не начат"}${x.q!=null?` · тест ${x.q}%`:""}</span></div></a>`}).join("")||`<p class="mut">В разделе пока нет лекций.</p>`}</div>`;
 }
 
 function desText(l,f,sel){f=Object.assign({},f,{sec:f.sec||f.blk,con:f.con||f.gen||f.sub});
@@ -224,26 +229,26 @@ function lightbox(src){const d=document.createElement("div");d.className="lb";d.
 let TR={sec:"all",cur:null,des:null};
 function trainerPage(){
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Тренажёр дефектов</h1>
-  <p class="mut">Случайный узел из открытых вам уроков. Отметьте все нарушения, проверьте себя и переходите к следующему.</p>
+  <p class="mut">Случайный узел из открытых вам лекций. Отметьте все нарушения, проверьте себя и переходите к следующему.</p>
   <div class="row" style="margin:12px 0"><select class="inp" id="trsec"><option value="all">Все разделы</option>${SEC.map(s=>`<option value="${s[0]}" ${TR.sec===s[0]?"selected":""}>${s[0]}. ${esc(s[1])}</option>`).join("")}</select><button class="btn dark" id="trnext">Следующий узел</button><span class="mut sm">Проверок: ${st.tr.n} · найдено ${st.tr.hit} из ${st.tr.tot}</span></div><div id="trbox"></div>`;
 }
 function videoPage(){
-  return `<h1 style="font-size:clamp(24px,4vw,36px)">Видеотека</h1><p class="mut">Видео, рекомендованные наставником, и подборки по технологии и типовым ошибкам для каждого урока.</p>
+  return `<h1 style="font-size:clamp(24px,4vw,36px)">Видеотека</h1><p class="mut">Видео, рекомендованные наставником, и подборки по технологии и типовым ошибкам для каждой лекции.</p>
   ${SEC.map(s=>`<div class="blk"><h2 style="font-size:17px">${s[0]}. ${esc(s[1])}</h2><div class="tbl-wrap"><table class="nt">${LS.filter(l=>l.s===s[0]).map(l=>`<tr><td style="width:60px"><b>${l.id}</b></td><td><a href="#/l/${l.id}">${esc(l.t)}</a>${l.vids.length?`<div class="sm">${l.vids.map(v=>`<a target="_blank" rel="noopener" href="${esc(v[1])}">▶ ${esc(v[0]||"Видео наставника")}</a>`).join(" · ")}</div>`:""}</td><td style="white-space:nowrap"><a target="_blank" rel="noopener" href="${lk.yt(l)}">Технология</a> · <a target="_blank" rel="noopener" href="${lk.ytd(l)}">Ошибки</a> · <a target="_blank" rel="noopener" href="${lk.rt(l)}">Rutube</a></td></tr>`).join("")}</table></div></div>`).join("")}`;
 }
 function normsPage(){
   const use={};LS.forEach(l=>l.n.forEach(n=>{(use[n[0]]=use[n[0]]||new Set()).add(l.id)}));
   const keys=[...new Set([...Object.keys(N),...Object.keys(use)])];
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Нормативная база</h1>
-  <p class="note">Иерархия на объекте: проект, прошедший экспертизу → действующие НТД РК (СН РК, СП РК) → межгосударственные ГОСТ, применяемые в РК → документация производителя (справочно, не основание для замечания, если не включена в проект). Статус и пункты проверяйте на <a href="https://www.egfntd.kz/" target="_blank" rel="noopener">egfntd.kz</a> и <a href="https://adilet.zan.kz/" target="_blank" rel="noopener">adilet.zan.kz</a>.</p>
-  <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th>Документ</th><th>Наименование</th><th>Уроки</th></tr>
+  <p class="note">Иерархия на объекте: проект, прошедший экспертизу → действующие НТД РК (СН РК, СП РК) → межгосударственные ГОСТ, применяемые в РК → документация производителя (справочно, не основание для замечания, если не включена в проект). Статус и пункты проверяйте на <a href="https://prg.kz/" target="_blank" rel="noopener">prg.kz</a> и <a href="https://adilet.zan.kz/" target="_blank" rel="noopener">adilet.zan.kz</a>.</p>
+  <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th>Документ</th><th>Наименование</th><th>Лекции</th></tr>
   ${keys.map(k=>`<tr><td><span class="code">${esc(nm(k)[0])}</span></td><td>${esc(nm(k)[1])}</td><td>${[...(use[k]||[])].map(id=>`<a href="#/l/${id}">${id}</a>`).join(", ")||"—"}</td></tr>`).join("")}</table></div></div>`;
 }
 function desPage(){
   const k=TR.des&&SEC.some(s=>s[0]===TR.des)?TR.des:SEC[0][0];
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Библиотека DES-замечаний</h1><p class="mut">Готовые замечания по формату «Комментарий — Норматив — Причина — Действия».</p>
   <div class="row" style="margin:12px 0"><select class="inp" id="dessec">${SEC.map(s=>`<option value="${s[0]}" ${k===s[0]?"selected":""}>${s[0]}. ${esc(s[1])}</option>`).join("")}</select></div>
-  ${LS.filter(l=>l.s===k).map(l=>`<div class="blk"><h2 style="font-size:16px">${l.id}. ${esc(l.t)}</h2><div class="des-pre">${desText(l,st.desf||{},l.d.map(()=>true))}</div><div class="row"><button class="btn pri" data-copy="${l.id}">Копировать</button><a class="btn" href="#/l/${l.id}">Открыть урок</a></div></div>`).join("")}`;
+  ${LS.filter(l=>l.s===k).map(l=>`<div class="blk"><h2 style="font-size:16px">${l.id}. ${esc(l.t)}</h2><div class="des-pre">${desText(l,st.desf||{},l.d.map(()=>true))}</div><div class="row"><button class="btn pri" data-copy="${l.id}">Копировать</button><a class="btn" href="#/l/${l.id}">Открыть лекцию</a></div></div>`).join("")}`;
 }
 
 /* ---------- аттестация ---------- */
@@ -251,12 +256,14 @@ let EX=null;
 function examPage(){
   if(EX&&EX.stage==="run")return examRun();
   if(EX&&EX.stage==="done")return examResult();
+  const cats=Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru"));
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Аттестация ТН</h1>
-  <p class="mut">Случайные вопросы из выбранных разделов: дефекты, причины нарушений, нормативы, порядок проверки и действия в DES. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
+  <p class="mut">Случайные вопросы из выбранных разделов нормативной базы, которые загрузил наставник. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
+  ${!cats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:`
   <div class="blk"><p>Аттестуемый: <b>${esc(st.prof.fio)}</b> · ${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}</p>
   <div class="row" style="margin-bottom:12px"><select class="inp" id="exn"><option value="20">20 вопросов</option><option value="30">30 вопросов</option><option value="50">50 вопросов</option></select></div>
-  <div class="chk">${SEC.map(s=>`<label><input type="checkbox" class="exs" value="${s[0]}" checked><span>${s[0]}. ${esc(s[1])} <span class="mut sm">(пройдено ${secDone(s[0])} из ${secCnt(s[0])})</span></span></label>`).join("")}</div>
-  <div class="row" style="margin-top:14px"><button class="btn pri" id="exgo">Начать аттестацию</button></div></div>
+  <div class="chk">${cats.map(cat=>`<label><input type="checkbox" class="exs" value="${esc(cat)}" checked><span>${esc(cat)} <span class="mut sm">(${EXAMBANK[cat].length} вопросов)</span></span></label>`).join("")}</div>
+  <div class="row" style="margin-top:14px"><button class="btn pri" id="exgo">Начать аттестацию</button></div></div>`}
   ${st.ex.length?`<div class="blk"><h2 style="font-size:17px">Мои аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${st.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}`;
 }
 function examRun(){return `<h1 style="font-size:clamp(22px,3.5vw,30px)">Аттестация: ${esc(st.prof.fio)}</h1><div class="row" style="justify-content:space-between;margin:8px 0"><span class="mut">${EX.qs.length} вопросов · порог 80 %</span><span class="timer" id="timer"></span></div><div class="blk" id="exq">${quizHTML(EX.qs,"e")}</div><button class="btn pri" id="exend">Завершить и получить результат</button>`}
@@ -267,12 +274,12 @@ function examFinish(){
 }
 function examResult(){
   const wrong=EX.qs.map((q,i)=>({q,i,a:EX.ans[i]})).filter(x=>x.a!==x.q.ans);
-  const bySec={};EX.qs.forEach((q,i)=>{const s=q.lid.replace(/\d+$/,"");bySec[s]=bySec[s]||[0,0];bySec[s][1]++;if(EX.ans[i]===q.ans)bySec[s][0]++});
+  const bySec={};EX.qs.forEach((q,i)=>{const s=q.cat;bySec[s]=bySec[s]||[0,0];bySec[s][1]++;if(EX.ans[i]===q.ans)bySec[s][0]++});
   return `<div class="blk"><h1 style="font-size:clamp(22px,3.5vw,30px)">Протокол аттестации ТН</h1>
   <p>ФИО: <b>${esc(st.prof.fio)}</b><br>Специальность: ${esc(st.prof.spec||"—")}<br>Уровень: ${esc(st.prof.lvl||"—")}<br>Дата: ${fd(EX.date)}<br>Разделы: ${esc(EX.secs.join(", "))}</p>
   <div class="stat"><div><b>${EX.pc}%</b>результат</div><div><b>${EX.ok}/${EX.qs.length}</b>верных ответов</div><div><b style="color:${EX.pc>=80?"var(--good)":"var(--bad)"}">${EX.pc>=80?"Зачёт":"Незачёт"}</b>порог 80 %</div></div>
-  <div class="tbl-wrap"><table class="nt"><tr><th>Раздел</th><th>Верно</th></tr>${Object.keys(bySec).sort().map(s=>`<tr><td>${s}. ${esc(secName(s))}</td><td>${bySec[s][0]} из ${bySec[s][1]}</td></tr>`).join("")}</table></div>
-  ${wrong.length?`<h2 style="font-size:17px;margin:18px 0 8px">Ошибки и правильные ответы</h2>${wrong.map(x=>`<div class="q"><p>${x.i+1}. ${esc(x.q.q)}</p><div class="mut sm">Ответ: ${x.a<0?"нет ответа":esc(x.q.opts[x.a])}</div><div style="color:var(--good)">Правильно: ${esc(x.q.opts[x.q.ans])}</div><a class="sm" href="#/l/${x.q.lid}">Повторить урок ${x.q.lid}</a></div>`).join("")}`:""}
+  <div class="tbl-wrap"><table class="nt"><tr><th>Раздел</th><th>Верно</th></tr>${Object.keys(bySec).sort().map(s=>`<tr><td>${esc(s)}</td><td>${bySec[s][0]} из ${bySec[s][1]}</td></tr>`).join("")}</table></div>
+  ${wrong.length?`<h2 style="font-size:17px;margin:18px 0 8px">Ошибки и правильные ответы</h2>${wrong.map(x=>`<div class="q"><p>${x.i+1}. ${esc(x.q.q)}</p><div class="mut sm">Ответ: ${x.a<0?"нет ответа":esc(x.q.opts[x.a])}</div><div style="color:var(--good)">Правильно: ${esc(x.q.opts[x.q.ans])}</div>${x.q.meta&&Object.keys(x.q.meta).length?`<div class="mut sm">${Object.entries(x.q.meta).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join(" · ")}</div>`:""}</div>`).join("")}`:""}
   <p style="margin-top:20px">Подпись аттестуемого ____________ &nbsp;&nbsp; Подпись наставника ____________</p>
   <div class="row no-print"><button class="btn pri" id="exprint">Печать протокола</button><button class="btn" id="exagain">Новая аттестация</button></div></div>`;
 }
@@ -281,14 +288,14 @@ function examResult(){
 function progressPage(){
   const done=LS.filter(l=>isDone(l.id)).length,qv=LS.map(l=>st.lp[l.id]&&st.lp[l.id].q).filter(x=>x!=null),avg=qv.length?Math.round(qv.reduce((a,b)=>a+b,0)/qv.length):0;
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Мой прогресс</h1>
-  <div class="blk"><div class="row" style="justify-content:space-between"><div><b>${esc(st.prof.fio)}</b><br><span class="mut">${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}${st.prof.obj?" · "+esc(st.prof.obj):""} · в школе с ${fdd(st.prof.reg)}</span></div><div class="row"><a class="btn pri" href="#/exam">Пройти аттестацию</a><a class="btn" href="#/register">Изменить данные</a></div></div>
+  <div class="blk"><div class="row" style="justify-content:space-between"><div><b>${esc(st.prof.fio)}</b><br><span class="mut">${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}${st.prof.obj?" · "+esc(st.prof.obj):""} · лекции с ${fdd(st.prof.reg)}</span></div><div class="row"><a class="btn pri" href="#/exam">Пройти аттестацию</a><a class="btn" href="#/register">Изменить данные</a></div></div>
   ${P.writeFail?`<p class="note">Результаты не удалось записать в общую базу — проверьте подключение к интернету и обновите страницу. Пока данные сохраняются в этом браузере.</p>`:""}</div>
-  <div class="stat"><div><b>${done}</b>уроков освоено из ${LS.length}</div><div><b>${SEC.filter(s=>secMastered(s[0])).length}</b>разделов закрыто из ${SEC.length}</div><div><b>${avg}%</b>средний балл блиц-тестов</div><div><b>${pct(st.tr.hit,st.tr.tot)}%</b>дефектов найдено</div><div><b>${st.ex.length}</b>аттестаций</div></div>
-  ${SEC.map(s=>`<div class="blk"><h2 style="font-size:16px">${s[0]}. ${esc(s[1])} · ${secDone(s[0])}/${secCnt(s[0])}${secMastered(s[0])?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Урок</th><th>Начат</th><th>Найди дефект</th><th>DES</th><th>Тест</th><th>Освоен</th></tr>${LS.filter(l=>l.s===s[0]).map(l=>{const x=st.lp[l.id]||{};return `<tr><td><a href="#/l/${l.id}">${l.id}. ${esc(l.t)}</a></td><td>${fdd(x.o)}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?"ошибки":"—"}</td><td>${x.q!=null?x.q+"%":"—"}</td><td>${x.p?fdd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
+  <div class="stat"><div><b>${done}</b>лекций освоено из ${LS.length}</div><div><b>${SEC.filter(s=>secMastered(s[0])).length}</b>разделов закрыто из ${SEC.length}</div><div><b>${avg}%</b>средний балл блиц-тестов</div><div><b>${pct(st.tr.hit,st.tr.tot)}%</b>дефектов найдено</div><div><b>${st.ex.length}</b>аттестаций</div></div>
+  ${SEC.map(s=>`<div class="blk"><h2 style="font-size:16px">${s[0]}. ${esc(s[1])} · ${secDone(s[0])}/${secCnt(s[0])}${secMastered(s[0])?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Найди дефект</th><th>DES</th><th>Тест</th><th>Освоен</th></tr>${LS.filter(l=>l.s===s[0]).map(l=>{const x=st.lp[l.id]||{};return `<tr><td><a href="#/l/${l.id}">${l.id}. ${esc(l.t)}</a></td><td>${fdd(x.o)}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?"ошибки":"—"}</td><td>${x.q!=null?x.q+"%":"—"}</td><td>${x.p?fdd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
 }
-function notFound(){return `<div class="blk"><h1 style="font-size:24px">Страница не найдена</h1><p><a href="#/">Вернуться к урокам</a></p></div>`}
+function notFound(){return `<div class="blk"><h1 style="font-size:24px">Страница не найдена</h1><p><a href="#/">Вернуться к лекциям</a></p></div>`}
 
-/* ----- форматирование лекции ----- */
+/* ----- форматирование конспекта ----- */
 function fmt(t){return esc(t).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")}
 function textBlock(v){const out=[];let ul=[];const flush=()=>{if(ul.length){out.push(`<ul>${ul.map(x=>`<li>${fmt(x)}</li>`).join("")}</ul>`);ul=[]}};
   String(v||"").split("\n").forEach(s=>{if(/^\s*[-•]\s+/.test(s))ul.push(s.replace(/^\s*[-•]\s+/,""));else{flush();if(s.trim())out.push(`<p>${fmt(s)}</p>`)}});flush();return out.join("")}
@@ -311,24 +318,23 @@ function finder(svg,l){
 
 function trainerLoad(){
   const pool=LS.filter(l=>(TR.sec==="all"||l.s===TR.sec)&&!locked(l)).flatMap(l=>exAll(l).filter(e=>e.d.length).map(e=>Object.assign(e,{lid:l.id,lt:l.t,key:l.id+":"+e.i})));const box=document.getElementById("trbox");
-  if(!pool.length){box.innerHTML=`<p class="mut">В этом разделе пока нет открытых уроков с разметкой дефектов.</p>`;return}
+  if(!pool.length){box.innerHTML=`<p class="mut">В этом разделе пока нет открытых лекций с разметкой дефектов.</p>`;return}
   let l;do{l=pool[Math.floor(Math.random()*pool.length)]}while(pool.length>1&&l.key===TR.cur);TR.cur=l.key;
-  box.innerHTML=`<div class="blk"><h2 style="font-size:18px;margin-bottom:10px">${esc(l.lt)}${l.i?` · ${esc(l.t)}`:""}</h2><div class="grid2"><div class="task-wrap">${svgOf(l,"task","task")}</div><div><p>Отметьте нарушения.</p><div class="row"><button class="btn pri" id="trchk">Проверить</button><a class="btn" href="#/l/${l.lid}">Открыть урок ${l.lid}</a></div><div class="res hidden" id="trres"></div><ol class="dlist hidden" id="trans">${l.d.map(d=>`<li><b>${esc(d[3])}</b><br><span class="mut">${esc(d[4])}</span></li>`).join("")}</ol></div></div></div>`;
+  box.innerHTML=`<div class="blk"><h2 style="font-size:18px;margin-bottom:10px">${esc(l.lt)}${l.i?` · ${esc(l.t)}`:""}</h2><div class="grid2"><div class="task-wrap">${svgOf(l,"task","task")}</div><div><p>Отметьте нарушения.</p><div class="row"><button class="btn pri" id="trchk">Проверить</button><a class="btn" href="#/l/${l.lid}">Открыть лекцию ${l.lid}</a></div><div class="res hidden" id="trres"></div><ol class="dlist hidden" id="trans">${l.d.map(d=>`<li><b>${esc(d[3])}</b><br><span class="mut">${esc(d[4])}</span></li>`).join("")}</ol></div></div></div>`;
   const F=finder(document.getElementById("task"),l);
   document.getElementById("trchk").onclick=e=>{const r=F.check(true);e.target.disabled=true;st.tr.n++;st.tr.hit+=r.hit;st.tr.tot+=r.tot;save();const el=document.getElementById("trres");el.classList.remove("hidden");el.textContent=`Найдено ${r.hit} из ${r.tot}${r.extra?`, лишних отметок: ${r.extra}`:""}.`;document.getElementById("trans").classList.remove("hidden");dirty=false};
 }
 
 function examStart(){
   const secs=[...document.querySelectorAll(".exs:checked")].map(x=>x.value);if(!secs.length){uiAlert("Выберите хотя бы один раздел.");return}
-  const n=+document.getElementById("exn").value,r=rng("ex"+Date.now()),pool=LS.filter(l=>secs.includes(l.s)),types=["viol","why","norm","chk","act"];
-  const cust=shuffle(pool.flatMap(l=>customQs(l,r)),r).slice(0,Math.floor(n/2));
-  const qs=[...cust];const ls=shuffle(pool,r);for(let i=0;i<n*2&&qs.length<n;i++){const q=buildQ(ls[i%ls.length],types[(i+Math.floor(r()*5))%5],r);if(q)qs.push(q)}
-  if(!qs.length){uiAlert("В выбранных разделах нет уроков с вопросами.");return}
-  EX={stage:"run",qs:shuffle(qs,r),secs,start:now(),end:Date.now()+qs.length*90000};dirty=true;render();
+  const n=+document.getElementById("exn").value,r=rng("ex"+Date.now());
+  const qs=pickRandom(EXAMBANK,secs,n,r);
+  if(!qs.length){uiAlert("В выбранных разделах нет вопросов.");return}
+  EX={stage:"run",qs,secs,start:now(),end:Date.now()+qs.length*90000};dirty=true;render();
 }
 
 /* ================= УРОК ПО ШАГАМ ================= */
-const STEP_T={look:"Посмотри",lec:"Лекция",vid:"Видео и материалы",task:"Найди дефект",ans:"Ответы",chk:"Чек-лист ТН",norm:"Норматив РК",rw:"Правильно / неправильно",des:"Замечание DES",quiz:"Блиц-тест"};
+const STEP_T={look:"Посмотри",lec:"Конспект",vid:"Видео и материалы",task:"Найди дефект",ans:"Ответы",chk:"Чек-лист ТН",norm:"Норматив РК",rw:"Правильно / неправильно",des:"Замечание DES",quiz:"Блиц-тест"};
 const STEP_TAB={look:"main",lec:"lec",vid:"links",task:"defect",ans:"defect",chk:"check",norm:"norms",rw:"ok",des:"des",quiz:"quiz"};
 let PENDING_EXI=null;
 function exAll(l){return [{t:l.et,photo:l.photo||null,sc:l.sc,d:l.d||[],main:true},...(l.ex||[]).map(e=>({t:e.t,photo:e.photo||null,sc:e.sc||"conc",d:e.d||[]}))].map((e,i)=>Object.assign(e,{i,t:e.t||`Упражнение ${i+1}`}))}
@@ -379,10 +385,10 @@ function gradeDes(root,T){let all=true;const res={};
     fs.querySelectorAll("label").forEach((lb,i)=>{lb.classList.remove("right","wrong");if(T[g][i][1])lb.classList.add("right");else if(sel.has(i))lb.classList.add("wrong")});fs.querySelector(".dqr").textContent=ok?"✓ Верно":"✗ Есть ошибки — зелёным отмечены правильные варианты";fs.querySelector(".dqr").style.color=ok?"var(--good)":"var(--bad)";fs.querySelectorAll("input").forEach(i=>i.disabled=true)});
   return{all,res}}
 
-/* ----- страница урока ----- */
+/* ----- страница лекции ----- */
 function lessonPage(id,stepK,sub){
   const l=(isMentor()?ALL:LS).find(x=>x.id===id);if(!l)return notFound();
-  if(locked(l)){const sl=LS.filter(x=>x.s===l.s);const pv=sl[sl.indexOf(l)-1];return `<div class="blk"><h1 style="font-size:24px">Урок ${l.id} пока закрыт</h1><p>Уроки раздела проходятся по порядку. Сначала завершите урок ${pv.id} «${esc(pv.t)}».</p><a class="btn pri" href="#/l/${pv.id}">Перейти к уроку ${pv.id}</a></div>`}
+  if(locked(l)){const sl=LS.filter(x=>x.s===l.s);const pv=sl[sl.indexOf(l)-1];return `<div class="blk"><h1 style="font-size:24px">Лекция ${l.id} пока закрыта</h1><p>Лекции раздела проходятся по порядку. Сначала завершите лекцию ${pv.id} «${esc(pv.t)}».</p><a class="btn pri" href="#/l/${pv.id}">Перейти к лекции ${pv.id}</a></div>`}
   const x=lp(l.id),S=lessonSteps(l);let k=S.includes(stepK)?stepK:defaultStep(l,x);
   if(!stepOpen(l,x,k))k=defaultStep(l,x);x.v=x.v||{};if(!x.o)x.o=now();if(!x.v[k])x.v[k]=now();
   const i=LS.indexOf(l),nextL=LS[i+1],si=S.indexOf(k),nx=needs(l,x),M=isMentor();
@@ -401,7 +407,7 @@ function lessonPage(id,stepK,sub){
     ${l.notes?`<div class="mentor-note">${M?`<div class="lec-tools no-print"><button class="btn edit sm" data-lk="notes">✎ Изменить</button><button class="btn sm" data-lk="delnotes">Удалить блок</button></div>`:""}<b>Наставник: на что обратить внимание</b><div>${textBlock(l.notes)}</div></div>`:(M?`<p class="no-print"><button class="btn edit" data-lk="notes">＋ Подсказка наставника</button></p>`:"")}
     ${l.gal.length?`<h3 style="font-size:15px;margin:16px 0 8px">Фото-примеры с объектов${M?` <button class="btn sm no-print" data-lk="delgal">Удалить блок</button>`:""}</h3><div class="gal">${l.gal.map((g,j)=>`<figure><img src="${blobUrl(g.id)}" alt="${esc(g.cap||"Фото с объекта")}" data-z="1" loading="lazy"><figcaption>${esc(g.cap||"")}</figcaption>${M?`<button class="btn sm no-print" data-lk="delg:${j}">Удалить фото</button>`:""}</figure>`).join("")}</div>`:""}`}
   if(k==="lec")body=lecView(l);
-  if(k==="vid"){const vs=effVids(l);body=`<div class="vids">${vs.map((v,j)=>`<div class="vidw">${M?`<button class="btn edit sm" data-evid="${j}">✎ Изменить</button>`:""}<a class="vid" target="_blank" rel="noopener" href="${esc(v[1])}"><span class="pl"></span><span><b>${esc(v[0]||"Видео")}</b><small>${esc(host(v[1]))}</small></span></a></div>`).join("")}${M?`<div class="vidw"><button class="btn edit" data-evid="-1">＋ Видео</button></div>`:""}</div>${vs.length?"":`<p class="mut">Видео для этого урока не назначены.</p>`}
+  if(k==="vid"){const vs=effVids(l);body=`<div class="vids">${vs.map((v,j)=>`<div class="vidw">${M?`<button class="btn edit sm" data-evid="${j}">✎ Изменить</button>`:""}<a class="vid" target="_blank" rel="noopener" href="${esc(v[1])}"><span class="pl"></span><span><b>${esc(v[0]||"Видео")}</b><small>${esc(host(v[1]))}</small></span></a></div>`).join("")}${M?`<div class="vidw"><button class="btn edit" data-evid="-1">＋ Видео</button></div>`:""}</div>${vs.length?"":`<p class="mut">Видео для этой лекции не назначены.</p>`}
     <p class="note">Если в видео сделано иначе, чем в проекте, — на объекте действует проект и НТД РК.</p>`}
   if(k==="task"){const E=exList(l),es=exSt(x);let ci=E.findIndex(e=>String(e.i)===String(sub));if(ci<0){ci=E.findIndex(e=>!(es.fx[e.i]||es.sx[e.i]));if(ci<0)ci=0}const ex=E[ci],nx2=E[ci+1];
     const ef=(x.ef||{})[ex.i],tries=(x.efa||{})[ex.i]||0;
@@ -418,23 +424,23 @@ function lessonPage(id,stepK,sub){
   if(k==="norm")body=`<div class="tbl-wrap"><table class="nt"><tr><th>Документ</th><th>Пункт / раздел</th><th>Требование</th></tr>
     <tr><td><span class="code">Проект</span></td><td>${esc(l.p||"—")}</td><td>Требования проекта для конкретного объекта — основание замечания в пределах НТД</td></tr>
     ${l.n.filter(n=>n[0]!=="PRJ").map(n=>`<tr><td>${normLine(n)}</td><td>${esc(n[1])}</td><td>${esc(n[2])}</td></tr>`).join("")}</table></div>
-    <p class="note">Перед записью в DES уточните номер пункта по действующей редакции на <a href="https://www.egfntd.kz/" target="_blank" rel="noopener">egfntd.kz</a>.</p>`;
+    <p class="note">Перед записью в DES уточните номер пункта по действующей редакции на <a href="https://prg.kz/" target="_blank" rel="noopener">prg.kz</a>.</p>`;
   if(k==="rw")body=`<div class="rw"><div class="ok">${cleanFig(l)}<h3 style="color:var(--good)">Правильно</h3><ul>${l.ok.map(o=>`<li>${esc(o)}</li>`).join("")}</ul></div>
     <div class="no">${svgOf(l,"answer")}<h3 style="color:var(--bad)">Неправильно</h3><ul>${l.d.map(d=>`<li>${esc(d[3])}</li>`).join("")}</ul></div></div>`;
   if(k==="des")body=l.d.length?`<p>Составьте замечание по этому узлу так, как в DES: заполните привязку (примеры — под полями) и отметьте верные варианты. Нажмите «Создать» — программа проверит Комментарий, Норматив, Причину и Действия.</p>
     ${x.dp?`<div class="res" style="background:rgba(46,125,79,.16)">Замечание составлено верно ${fd(x.dp)}. Можно потренироваться ещё раз.</div>`:""}
     <div id="desbox"></div><div class="res hidden" id="dres"></div>
-    <div id="desref" class="hidden"><h3 style="font-size:15px;margin:16px 0 8px">Эталонное замечание</h3><div class="des-pre" id="despre"></div><button class="btn pri" id="copydes">Копировать замечание</button></div>`:`<p class="mut">Для этого урока дефекты не размечены.</p>`;
+    <div id="desref" class="hidden"><h3 style="font-size:15px;margin:16px 0 8px">Эталонное замечание</h3><div class="des-pre" id="despre"></div><button class="btn pri" id="copydes">Копировать замечание</button></div>`:`<p class="mut">Для этой лекции дефекты не размечены.</p>`;
   if(k==="quiz")body=`<div id="quiz"></div><div class="row" style="margin-top:12px"><button class="btn pri" id="qsub">Проверить ответы</button><button class="btn" id="qnew">Новый вариант</button></div>
     <div class="res ${x.q!=null?"":"hidden"}" id="qres">${x.q!=null?`Лучший результат: ${x.q}% (${fd(x.qd)}).`:""}</div>`;
   const prevK=S[si-1],nextK=S[si+1],nextOpen=nextK&&(M||(k==="task"?taskOK(l,x):true));
-  return `<div class="crumbs"><a href="#/">Разделы</a> / <a href="#/s/${l.s}">${esc(secName(l.s))}</a> / Урок ${l.id}</div>
-  ${M?`<div class="mbar no-print">Режим наставника: жёлтые кнопки «Изменить» видите только вы. Абитуриенты видят готовый результат.${l.hidden?" Урок скрыт от абитуриентов.":""} <a class="btn pri" href="#/mentor/edit/${l.id}/main">Полный редактор урока</a></div>`:""}
-  <header class="lhead"><div class="lnum">${l.id}</div><div><h1>${esc(l.t)}</h1><div class="lstat sm"><span class="${nx.vis?"ok":""}">Шаги ${S.filter(s=>x.v&&x.v[s]).length}/${S.length}</span>${l.d.length?`<span class="${x.fall?"ok":""}">Найди дефект ${x.fall?"✓":"—"}</span><span class="${x.dp?"ok":""}">DES ${x.dp?"✓":"—"}</span>`:""}<span class="${nx.quiz?"ok":""}">Тест ${x.q!=null?x.q+"%":"—"}</span>${x.p?`<span class="pill ok">Урок освоен ${fdd(x.p)}</span>`:""}</div></div></header>
-  <nav class="tabs no-print" aria-label="Шаги урока">${S.map((s,j)=>{const op=stepOpen(l,x,s);return op?`<a href="#/l/${l.id}/${s}" class="${s===k?"on":""}"><b>${j+1}</b>${esc(stTitle(l,s))}<i>${stIcon(s)}</i></a>`:`<span class="off" title="Откроется после предыдущих шагов"><b>${j+1}</b>${esc(stTitle(l,s))}<i>🔒</i></span>`}).join("")}</nav>
+  return `<div class="crumbs"><a href="#/">Разделы</a> / <a href="#/s/${l.s}">${esc(secName(l.s))}</a> / Лекция ${l.id}</div>
+  ${M?`<div class="mbar no-print">Режим наставника: жёлтые кнопки «Изменить» видите только вы. Абитуриенты видят готовый результат.${l.hidden?" Лекция скрыта от абитуриентов.":""} <a class="btn pri" href="#/mentor/edit/${l.id}/main">Полный редактор лекции</a></div>`:""}
+  <header class="lhead"><div class="lnum">${l.id}</div><div><h1>${esc(l.t)}</h1><div class="lstat sm"><span class="${nx.vis?"ok":""}">Шаги ${S.filter(s=>x.v&&x.v[s]).length}/${S.length}</span>${l.d.length?`<span class="${x.fall?"ok":""}">Найди дефект ${x.fall?"✓":"—"}</span><span class="${x.dp?"ok":""}">DES ${x.dp?"✓":"—"}</span>`:""}<span class="${nx.quiz?"ok":""}">Тест ${x.q!=null?x.q+"%":"—"}</span>${x.p?`<span class="pill ok">Лекция освоен ${fdd(x.p)}</span>`:""}</div></div></header>
+  <nav class="tabs no-print" aria-label="Шаги лекции">${S.map((s,j)=>{const op=stepOpen(l,x,s);return op?`<a href="#/l/${l.id}/${s}" class="${s===k?"on":""}"><b>${j+1}</b>${esc(stTitle(l,s))}<i>${stIcon(s)}</i></a>`:`<span class="off" title="Откроется после предыдущих шагов"><b>${j+1}</b>${esc(stTitle(l,s))}<i>🔒</i></span>`}).join("")}</nav>
   <section class="blk step" id="b-${k}">${head}${intro}${body}</section>
   <div class="pager no-print">${prevK?`<a class="btn" href="#/l/${l.id}/${prevK}">← ${esc(stTitle(l,prevK))}</a>`:"<span></span>"}
-  ${nextK?(nextOpen?`<a class="btn dark" id="nextstep" href="#/l/${l.id}/${nextK}">${esc(stTitle(l,nextK))} →</a>`:`<span class="mut sm" id="nextwait" data-href="#/l/${l.id}/${nextK}" data-t="${esc(stTitle(l,nextK))} →">Найдите все дефекты или откройте ответы, чтобы перейти дальше</span>`):(nextL&&x.p?`<a class="btn dark" href="#/l/${nextL.id}">Следующий урок: ${nextL.id} →</a>`:`<a class="btn" href="#/s/${l.s}">К разделу</a>`)}</div>`;
+  ${nextK?(nextOpen?`<a class="btn dark" id="nextstep" href="#/l/${l.id}/${nextK}">${esc(stTitle(l,nextK))} →</a>`:`<span class="mut sm" id="nextwait" data-href="#/l/${l.id}/${nextK}" data-t="${esc(stTitle(l,nextK))} →">Найдите все дефекты или откройте ответы, чтобы перейти дальше</span>`):(nextL&&x.p?`<a class="btn dark" href="#/l/${nextL.id}">Следующая лекция: ${nextL.id} →</a>`:`<a class="btn" href="#/s/${l.s}">К разделу</a>`)}</div>`;
 }
 
 function bindLesson(l,k,sub){
@@ -446,7 +452,7 @@ function bindLesson(l,k,sub){
   if(isMentor())app.querySelectorAll("[data-lk]").forEach(b=>b.onclick=async()=>{const [op,j]=b.dataset.lk.split(":");try{
     if(op==="notes"){modal("Подсказка наставника",[{label:"На что обратить внимание. Строки с «- » — список",type:"area",rows:8,value:l.notes||""}],async v=>{await quickSave(l,d=>{d.notes=v[0]})});return}
     if(op==="delnotes"){if(await uiConfirm("Удалить блок «На что обратить внимание»?"))await quickSave(l,d=>{d.notes=""});return}
-    if(op==="delgal"){if(await uiConfirm("Удалить все фото-примеры этого урока?"))await quickSave(l,d=>{d.gal=[]});return}
+    if(op==="delgal"){if(await uiConfirm("Удалить все фото-примеры этой лекции?"))await quickSave(l,d=>{d.gal=[]});return}
     if(op==="delg"){if(await uiConfirm(`Удалить фото ${+j+1}?`))await quickSave(l,d=>{d.gal.splice(+j,1)});return}
   }catch(e){uiAlert("Не сохранено: нет прав на запись (нужна роль «Наставник»).")}});
   app.querySelectorAll("[data-elnk]").forEach(b=>b.onclick=()=>editLink(l,"l",+b.dataset.elnk));
@@ -476,7 +482,7 @@ function bindLesson(l,k,sub){
     const check=()=>{const el=document.getElementById("dres");el.classList.remove("hidden");
       if(!(f.obj||"").trim()||!(f.ax||"").trim()){el.textContent="Заполните привязку: «Выберите проект» и «Ось» — без неё замечание в DES не принимается. Примеры указаны под полями.";el.style.color="var(--bad)";el.scrollIntoView({behavior:"smooth",block:"center"});return}
       const g=gradeDes(db2,T);x.da=(x.da||0)+1;el.style.color="";
-      if(g.all){if(!x.dp)x.dp=now();const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Урок освоен!":""} Ниже — эталонный текст для DES.`}
+      if(g.all){if(!x.dp)x.dp=now();const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Лекция освоена!":""} Ниже — эталонный текст для DES.`}
       else el.textContent=`Есть ошибки в полях: ${Object.keys(g.res).filter(z=>!g.res[z]).map(z=>({defs:"Комментарий",norms:"Норматив",whys:"Причина",acts:"Действия"})[z]).join(", ")}. Зелёным отмечены правильные варианты. Нажмите «Отмена», чтобы попробовать снова.`;
       save();dirty=false;document.getElementById("dsub").disabled=true;
       const ref=document.getElementById("desref");ref.classList.remove("hidden");const sel=l.d.map(()=>true);document.getElementById("despre").innerHTML=desText(l,f,sel);document.getElementById("copydes").onclick=e=>copyText(plain(desText(l,f,sel)),e.target);el.scrollIntoView({behavior:"smooth",block:"center"})};
@@ -490,10 +496,10 @@ function bindLesson(l,k,sub){
     mk()}
   const qz=document.getElementById("quiz");
   if(qz){let v=x.qv||0,qs;
-    const mk=()=>{qs=lessonQuiz(l,rng(l.id+":"+v));qz.innerHTML=qs.length?quizHTML(qs,"q"):`<p class="mut">Для теста нужно заполнить чек-лист, дефекты и нормативы урока.</p>`;document.getElementById("qsub").disabled=!qs.length};
+    const mk=()=>{qs=lessonQuiz(l,rng(l.id+":"+v));qz.innerHTML=qs.length?quizHTML(qs,"q"):`<p class="mut">Для теста нужно заполнить чек-лист, дефекты и нормативы лекции.</p>`;document.getElementById("qsub").disabled=!qs.length};
     mk();qz.addEventListener("change",()=>{dirty=true});
     document.getElementById("qsub").onclick=()=>{const g=gradeQuiz(qz,qs,"q");const pc=pct(g.ok,qs.length);x.q=Math.max(x.q||0,pc);x.qd=now();x.qa=(x.qa||0)+1;const passed=tryPass(l,x);save();dirty=false;const el=document.getElementById("qres");el.classList.remove("hidden");const n=needs(l,x);
-      el.innerHTML=`Результат: ${g.ok} из ${qs.length} (${pc}%). `+(x.p?(passed?"Урок освоен! Следующий урок открыт.":"Урок уже освоен."):pc>=80?`Тест сдан. Для освоения урока осталось: ${[!n.vis&&"пройти все шаги урока",!n.find&&"найти все дефекты",!n.des&&"верно составить замечание DES"].filter(Boolean).join(", ")}.`:"Для зачёта нужно 80 %. Разберите ответы и пройдите новый вариант.");document.getElementById("qsub").disabled=true};
+      el.innerHTML=`Результат: ${g.ok} из ${qs.length} (${pc}%). `+(x.p?(passed?"Лекция освоена! Следующая лекция открыта.":"Лекция уже освоена."):pc>=80?`Тест сдан. Для освоения лекции осталось: ${[!n.vis&&"пройти все шаги лекции",!n.find&&"найти все дефекты",!n.des&&"верно составить замечание DES"].filter(Boolean).join(", ")}.`:"Для зачёта нужно 80 %. Разберите ответы и пройдите новый вариант.");document.getElementById("qsub").disabled=true};
     document.getElementById("qnew").onclick=()=>{v++;x.qv=v;save();mk();document.getElementById("qres").classList.add("hidden")}}
 }
 
@@ -527,13 +533,13 @@ function lecHTML(bl){return (bl||[]).map(b=>lecBlock(b)).join("")}
 const LEC_NAME={h:"Заголовок",p:"Текст",note:"Важно",img:"Слайдер фото",row:"Лента фото",link:"Ссылка"};
 function lecView(l){
   const bl=l.lec||[],M=isMentor(),up=!!P.assets;
-  if(!M)return bl.length?`<div class="lec">${lecHTML(bl)}</div>`:`<p class="mut">Лекция пока не подготовлена.</p>`;
+  if(!M)return bl.length?`<div class="lec">${lecHTML(bl)}</div>`:`<p class="mut">Конспект пока не подготовлен.</p>`;
   return `<div class="lec">${bl.map((b,i)=>`<div class="lecw"><div class="lec-tools no-print"><span class="mut sm">${i+1}. ${LEC_NAME[b.t]||""}</span>
      <button class="btn edit sm" data-lq="edit:${i}">✎ Изменить</button>
      ${b.t==="row"?`<label class="btn edit sm ${up?"":"disabled"}">＋ Фото в ленту (справа)<input type="file" accept="image/*" multiple hidden data-lqadd="${i}" ${up?"":"disabled"}></label>`:""}${b.t==="img"?`<label class="btn edit sm ${up?"":"disabled"}">＋ Фото в слайдер<input type="file" accept="image/*" multiple hidden data-lqadd="${i}" ${up?"":"disabled"}></label>${imgsOf(b).length>1?`<button class="btn sm" data-lq="delimg:${i}">Удалить показанное фото</button>`:""}`:""}
      <button class="btn sm" data-lq="up:${i}" aria-label="Выше" ${i?"":"disabled"}>↑</button><button class="btn sm" data-lq="down:${i}" aria-label="Ниже" ${i<bl.length-1?"":"disabled"}>↓</button><button class="btn sm" data-lq="del:${i}">Удалить блок</button></div>
-     ${lecBlock(b,i,true)||`<p class="mut">(пустой блок)</p>`}</div>`).join("")||`<p class="mut">Лекция пустая. Добавьте первый блок кнопками ниже.</p>`}</div>
-  <div class="lec-add no-print"><b>Добавить в конец лекции:</b>
+     ${lecBlock(b,i,true)||`<p class="mut">(пустой блок)</p>`}</div>`).join("")||`<p class="mut">Конспект пустой. Добавьте первый блок кнопками ниже.</p>`}</div>
+  <div class="lec-add no-print"><b>Добавить в конец конспекта:</b>
    <button class="btn edit" data-lq="add:h">＋ Заголовок</button><button class="btn edit" data-lq="add:p">＋ Текст</button><button class="btn edit" data-lq="add:note">＋ Важно</button>
    <label class="btn edit ${up?"":"disabled"}">＋ Слайдер фото<input type="file" accept="image/*" multiple hidden id="lqnew" ${up?"":"disabled"}></label><label class="btn edit ${up?"":"disabled"}">＋ Лента фото<input type="file" accept="image/*" multiple hidden id="lqrow" ${up?"":"disabled"}></label><button class="btn edit" data-lq="add:link">＋ Ссылка</button>
    <span class="sm" id="edup"></span></div>
@@ -560,7 +566,7 @@ function bindLecture(l){
       if(op==="add"){const nb=arg==="link"?{t:"link",v:"",u:""}:{t:arg,v:""};modal(`Новый блок: ${LEC_NAME[arg]}`,lecFields(nb),async v=>{lecApply(nb,v);await lecSave(l,a=>a.push(nb))});return}
       if(op==="edit"){modal(`Блок ${i+1}: ${LEC_NAME[cur.t]}`,lecFields(cur),async v=>{await lecSave(l,a=>{lecApply(a[i],v)})});return}
       if(op==="up"||op==="down"){const j=op==="up"?i-1:i+1;await lecSave(l,a=>{if(j<0||j>=a.length)return;[a[i],a[j]]=[a[j],a[i]]});return}
-      if(op==="del"){if(!await uiConfirm("Удалить этот блок лекции?"))return;await lecSave(l,a=>a.splice(i,1));return}
+      if(op==="del"){if(!await uiConfirm("Удалить этот блок конспекта?"))return;await lecSave(l,a=>a.splice(i,1));return}
       if(op==="delrow"){const j=+a2;if(!await uiConfirm(`Удалить фото ${j+1} из ленты?`))return;await lecSave(l,a=>{a[i].imgs.splice(j,1)});return}
       if(op==="mvrow"){const j=+a2,k2=j+(+a3);await lecSave(l,a=>{const m=a[i].imgs;if(k2<0||k2>=m.length)return;[m[j],m[k2]]=[m[k2],m[j]]});return}
       if(op==="delimg"){const f=btn.closest(".lecw").querySelector(".sld");const k=+(f&&f.dataset.i||0);if(!await uiConfirm(`Удалить фото ${k+1} из слайдера?`))return;await lecSave(l,a=>{a[i].imgs.splice(k,1)});return}
@@ -659,7 +665,7 @@ function lessonQuiz(l,r){const c=shuffle(customQs(l,r),r).slice(0,15);let auto=[
 /* ================= ГЛАВНАЯ: конструктор наставника ================= */
 const HB_NAME={hero:"Баннер",route:"Шаги обучения",princ:"Принципы",secs:"Разделы курса",text:"Текст",img:"Картинка",gal:"Галерея",note:"Выделенный текст",hr:"Разделитель"};
 function DEFAULT_HOME(){return[
-  {t:"hero",logo:true,title:CFG.heroTitle||"Центр «Практика ТН»",text:CFG.heroText||"Учебный центр технического надзора Engineering Services: визуальные уроки по строительству жилых комплексов. Наставник готовит материал, абитуриент проходит урок и подтверждает знания.",img:null,noimg:false,pos:"right",cap:"Пример задания «Найди дефект»"},
+  {t:"hero",logo:true,title:CFG.heroTitle||"Центр «Практика ТН»",text:CFG.heroText||"Учебный центр технического надзора Engineering Services: визуальные лекции по строительству жилых комплексов. Наставник готовит материал, абитуриент проходит лекцию и подтверждает знания.",img:null,noimg:false,pos:"right",cap:"Пример задания «Найди дефект»"},
   {t:"route",items:["Посмотри","Найди дефект","Объясни нарушение","Найди норматив","Реши, что делать","Напиши замечание в DES"]},
   {t:"princ",items:[["Фото и видео","показывают, как выполняется работа"],["Проект","определяет, как должно быть на конкретном объекте"],["Норматив РК","— обязательное требование"],["ТН","сверяет факт с проектом и НТД и фиксирует несоответствие"]]},
   {t:"secs",title:"Разделы"}]}
@@ -668,10 +674,10 @@ async function homeSave(fn){const h=clone(homeBlocks());fn(h);await P.db.doc("cm
 async function secSave(k,patch){await P.db.doc("cms/main/sections/"+k).set(Object.assign({k,name:secName(k)||k,hidden:false},CSEC[k]||{},patch))}
 function secsGrid(b,M){
   const done=LS.filter(l=>isDone(l.id)).length;
-  return `<div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="font-size:20px">${esc(b.title||"Разделы")}</h2><span class="mut">Освоено ${done} из ${LS.length} уроков${CFG.seq?" · уроки открываются по порядку":""}</span></div>
+  return `<div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="font-size:20px">${esc(b.title||"Разделы")}</h2><span class="mut">Освоено ${done} из ${LS.length} лекций${CFG.seq?" · лекции открываются по порядку":""}</span></div>
   ${SEC.length?"":`<div class="note">Наставник ещё не открыл вам разделы для обучения. Как только он отметит доступные разделы в журнале, они появятся здесь.</div>`}
   <div class="secs">${SEC.map(s=>{const d=secDone(s[0]),n=secCnt(s[0]),first=LS.find(l=>l.s===s[0]),cov=CSEC[s[0]]&&CSEC[s[0]].img;
-   return `<div class="secw"><a class="sec" href="#/s/${s[0]}"><div class="th">${cov?`<img src="${blobUrl(cov)}" alt="" style="width:100%;height:100%;object-fit:cover">`:first?cleanFig(first):""}</div><div class="bd"><h3>${s[0]}. ${esc(s[1])}</h3><span class="mut sm">${n} уроков · освоено ${d}${secMastered(s[0])?" · <b style='color:var(--good)'>раздел закрыт ✓</b>":""}</span><div class="prog"><i style="width:${pct(d,n)}%"></i></div></div></a>
+   return `<div class="secw"><a class="sec" href="#/s/${s[0]}"><div class="th">${cov?`<img src="${blobUrl(cov)}" alt="" style="width:100%;height:100%;object-fit:cover">`:first?cleanFig(first):""}</div><div class="bd"><h3>${s[0]}. ${esc(s[1])}</h3><span class="mut sm">${n} лекций · освоено ${d}${secMastered(s[0])?" · <b style='color:var(--good)'>раздел закрыт ✓</b>":""}</span><div class="prog"><i style="width:${pct(d,n)}%"></i></div></div></a>
    ${M?`<div class="lec-tools no-print" style="margin-top:6px"><button class="btn edit sm" data-sren="${s[0]}">✎ Название</button><label class="btn edit sm">🖼 Обложка<input type="file" accept="image/*" hidden data-scov="${s[0]}"></label>${cov?`<button class="btn sm" data-scovdel="${s[0]}">Убрать обложку</button>`:""}<button class="btn sm" data-shide="${s[0]}">Удалить раздел</button></div>`:""}</div>`}).join("")}
    ${M?`<button type="button" class="sec secadd no-print" data-sadd><span>＋</span><b>Новый раздел</b></button>`:""}</div>`;
 }
@@ -750,7 +756,7 @@ function bindHome(){
   app.querySelectorAll("[data-sren]").forEach(b=>b.onclick=async()=>{const k=b.dataset.sren;const n=await uiPrompt("Название раздела",secName(k));if(!n||!n.trim())return;try{await secSave(k,{name:n.trim()})}catch(e){err()}});
   app.querySelectorAll("[data-scov]").forEach(inp=>inp.onchange=async()=>{const r=await uploadImg(inp.files[0]);if(!r)return;try{await secSave(inp.dataset.scov,{img:r.id})}catch(e){err()}});
   app.querySelectorAll("[data-scovdel]").forEach(b=>b.onclick=async()=>{try{await secSave(b.dataset.scovdel,{img:null})}catch(e){err()}});
-  app.querySelectorAll("[data-shide]").forEach(b=>b.onclick=async()=>{const k=b.dataset.shide;if(!await uiConfirm(`Удалить раздел «${secName(k)}» с сайта? Его уроки скроются у абитуриентов. Вернуть раздел можно в «Кабинет наставника → Уроки и разделы».`))return;try{await secSave(k,{hidden:true})}catch(e){err()}});
+  app.querySelectorAll("[data-shide]").forEach(b=>b.onclick=async()=>{const k=b.dataset.shide;if(!await uiConfirm(`Удалить раздел «${secName(k)}» с сайта? Его лекции скроются у абитуриентов. Вернуть раздел можно в «Кабинет наставника → Лекции и разделы».`))return;try{await secSave(k,{hidden:true})}catch(e){err()}});
   const sa=app.querySelector("[data-sadd]");if(sa)sa.onclick=async()=>{const n=await uiPrompt("Название нового раздела");if(!n||!n.trim())return;const used=new Set([...BASE_SEC.map(s=>s[0]),...Object.keys(CSEC)]);const k="KLMNOPQRSTUVWXYZ".split("").find(c=>!used.has(c));if(!k){uiAlert("Достигнут предел разделов.");return}try{await P.db.doc("cms/main/sections/"+k).set({k,name:n.trim(),hidden:false})}catch(e){err()}};
 }
 
@@ -763,12 +769,12 @@ function mentorGate(){
   if(!P.dataReady)return `<div class="blk"><p>Подключение к базе школы…</p></div>`;
   return `<div class="blk"><h1 style="font-size:24px">Режим наставника</h1><p>У вашей учётной записи нет роли «Наставник» в этой школе. Попросите владельца назначить роль в базе данных (таблица profiles).</p></div>`;
 }
-function mNav(cur){const f=FLASH;return `${f?`<div class="res" style="background:rgba(46,125,79,.18)">${esc(f)}</div>`:""}<div class="mtabs no-print"><a href="#/mentor" class="${cur==="d"?"on":""}">Уроки и разделы</a><a href="#/mentor/journal" class="${cur==="j"?"on":""}">Журнал абитуриентов</a><a href="#/mentor/settings" class="${cur==="s"?"on":""}">Настройки</a><button class="btn" id="mout">Выйти из аккаунта</button></div>`}
+function mNav(cur){const f=FLASH;return `${f?`<div class="res" style="background:rgba(46,125,79,.18)">${esc(f)}</div>`:""}<div class="mtabs no-print"><a href="#/mentor" class="${cur==="d"?"on":""}">Лекции и разделы</a><a href="#/mentor/journal" class="${cur==="j"?"on":""}">Журнал абитуриентов</a><a href="#/mentor/exam" class="${cur==="e"?"on":""}">Банк аттестации</a><a href="#/mentor/settings" class="${cur==="s"?"on":""}">Настройки</a><button class="btn" id="mout">Выйти из аккаунта</button></div>`}
 
 function mentorDash(){
   return `<h1 style="font-size:clamp(24px,4vw,34px)">Кабинет наставника</h1>${mNav("d")}
-  <p class="mut">Изменения сохраняются в общую базу и сразу видны всем абитуриентам. Базовые уроки можно изменить и вернуть к исходной версии.</p>
-  ${SEC.map(s=>`<div class="blk"><div class="row" style="justify-content:space-between"><h2 style="font-size:17px">${s[0]}. ${esc(s[1])}</h2><div class="row"><button class="btn" data-ren="${s[0]}">Переименовать</button><button class="btn" data-hidesec="${s[0]}">Удалить раздел</button><a class="btn pri" href="#/mentor/new/${s[0]}">＋ Урок</a></div></div>
+  <p class="mut">Изменения сохраняются в общую базу и сразу видны всем абитуриентам. Базовые лекции можно изменить и вернуть к исходной версии.</p>
+  ${SEC.map(s=>`<div class="blk"><div class="row" style="justify-content:space-between"><h2 style="font-size:17px">${s[0]}. ${esc(s[1])}</h2><div class="row"><button class="btn" data-ren="${s[0]}">Переименовать</button><button class="btn" data-hidesec="${s[0]}">Удалить раздел</button><a class="btn pri" href="#/mentor/new/${s[0]}">＋ Лекция</a></div></div>
   <div class="tbl-wrap"><table class="nt">${ALL.filter(l=>l.s===s[0]).map(l=>`<tr><td style="width:60px"><b>${l.id}</b></td><td>${esc(l.t||"(без названия)")} ${l.hidden?'<span class="pill no">Скрыт</span>':""} ${l.edited?(l.base?'<span class="pill">Изменён</span>':'<span class="pill ok">Новый</span>'):""} ${l.photo?'<span class="pill">Фото-задание</span>':""}</td><td style="white-space:nowrap"><a class="btn" href="#/mentor/edit/${l.id}">Редактировать</a></td></tr>`).join("")}</table></div></div>`).join("")}
   ${Object.values(CSEC).filter(c=>c.hidden).length?`<div class="blk"><h2 style="font-size:17px">Удалённые (скрытые) разделы</h2>${Object.values(CSEC).filter(c=>c.hidden).map(c=>`<div class="row" style="margin:6px 0"><b>${c.k}.</b> ${esc(c.name||(BASE_SEC.find(z=>z[0]===c.k)||[,c.k])[1])} <button class="btn sm" data-unhide="${c.k}">Вернуть раздел</button></div>`).join("")}</div>`:""}
   <div class="row"><button class="btn dark" id="addsec">＋ Новый раздел</button><a class="btn" href="#/des">Библиотека DES-замечаний</a><a class="btn" href="#/exam">Аттестация</a></div>`;
@@ -776,17 +782,84 @@ function mentorDash(){
 
 function mentorSettings(){
   return `<h1 style="font-size:clamp(24px,4vw,34px)">Настройки школы</h1>${mNav("s")}
-  <div class="blk"><h2 style="font-size:17px">Порядок прохождения</h2><label class="row"><input type="checkbox" id="seq" ${CFG.seq?"checked":""}> Открывать уроки раздела по порядку: следующий — после зачёта предыдущего</label>
-  <label class="row" style="margin-top:8px"><input type="checkbox" id="needall" ${CFG.needAll!==false?"checked":""}> Для зачёта урока нужно найти все дефекты в задании «Найди дефект» и сдать блиц-тест на 80 %</label></div>
+  <div class="blk"><h2 style="font-size:17px">Порядок прохождения</h2><label class="row"><input type="checkbox" id="seq" ${CFG.seq?"checked":""}> Открывать лекции раздела по порядку: следующий — после зачёта предыдущего</label>
+  <label class="row" style="margin-top:8px"><input type="checkbox" id="needall" ${CFG.needAll!==false?"checked":""}> Для зачёта лекции нужно найти все дефекты в задании «Найди дефект» и сдать блиц-тест на 80 %</label></div>
   <div class="blk"><h2 style="font-size:17px">Доступ новых абитуриентов</h2>
   <label class="row"><input type="radio" name="accdef" value="all" ${CFG.accDef!=="none"?"checked":""}> Открывать все разделы сразу после регистрации</label>
   <label class="row" style="margin-top:6px"><input type="radio" name="accdef" value="none" ${CFG.accDef==="none"?"checked":""}> Закрывать все разделы — наставник открывает их в журнале («Доступ к разделам»)</label></div>
-  <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Школа ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
+  <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Название в шапке сайта (рядом с логотипом)<input class="inp" id="hsite" value="${esc(CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»")}"></label><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Школа ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
   <p class="mut sm">Доступ в кабинет наставника определяется ролью учётной записи (<code>profiles.role</code> в базе данных) — отдельный пароль не нужен.</p>`;
 }
 
-/* ----- редактор урока ----- */
-const ETABS=[["main","Основное"],["lec","Лекция"],["defect","Найди дефект (упражнения)"],["links","Видео, ссылки, фото"],["check","Чек-лист"],["norms","Норматив РК"],["ok","Эталон «Посмотри»"],["des","Замечание DES"],["quiz","Блиц-тест"]];
+/* ================= БАНК ВОПРОСОВ АТТЕСТАЦИИ (загрузка из Excel) ================= */
+function examQRow(cat,i,q){
+  return `<div class="q" style="padding:10px 0"><p>${i+1}. ${esc(q.q)}</p>
+  <div class="mut sm">A) ${esc(q.a)} · B) ${esc(q.b)} · C) ${esc(q.c)} · D) ${esc(q.d)} — верно: ${esc(q.correct)}</div>
+  ${q.meta&&Object.keys(q.meta).length?`<div class="mut sm">${Object.entries(q.meta).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join(" · ")}</div>`:""}
+  <div class="row" style="margin-top:4px"><button class="btn sm" data-ebedit="${esc(cat)}:${i}">✎ Изменить</button><button class="btn sm" data-ebdelq="${esc(cat)}:${i}">Удалить</button></div></div>`;
+}
+function examBankPage(){
+  const cats=Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru"));
+  return `<h1 style="font-size:clamp(24px,4vw,34px)">Банк вопросов аттестации</h1>${mNav("e")}
+  <div class="blk"><h2 style="font-size:17px">Загрузить из Excel</h2>
+  <p class="mut sm">Загрузите .xlsx — каждый лист книги станет отдельным разделом аттестации. Формат листа: столбец «Вопрос», затем 4 варианта ответа, затем «Правильный ответ» (A–D). Загрузка заменяет вопросы только для разделов (листов), присутствующих в файле — остальные разделы банка не затрагиваются.</p>
+  <label class="btn pri">Выбрать файл .xlsx<input type="file" accept=".xlsx,.xls" hidden id="ebfile"></label><span class="sm" id="ebmsg" style="margin-left:10px"></span></div>
+  ${cats.length?cats.map(cat=>`<div class="blk"><div class="row" style="justify-content:space-between"><h2 style="font-size:16px">${esc(cat)} · ${EXAMBANK[cat].length} вопросов</h2><div class="row"><button class="btn sm" data-ebadd="${esc(cat)}">＋ Вопрос</button><button class="btn sm" data-ebdelcat="${esc(cat)}">Удалить раздел</button></div></div>
+  <details><summary>Показать вопросы</summary>${EXAMBANK[cat].map((q,i)=>examQRow(cat,i,q)).join("")}</details></div>`).join(""):`<p class="mut">Банк пуст. Загрузите файл выше или добавьте раздел вручную.</p>`}
+  <button class="btn" id="ebnewcat">＋ Новый раздел вручную</button>`;
+}
+function ebQuestionModal(cat,i){
+  const isNew=i==null;const q=isNew?{q:"",a:"",b:"",c:"",d:"",correct:"A"}:EXAMBANK[cat][i];
+  modal(isNew?`Новый вопрос — ${cat}`:`Вопрос ${i+1} — ${cat}`,[
+    {label:"Текст вопроса",type:"area",rows:3,value:q.q},
+    {label:"Вариант A",value:q.a},{label:"Вариант B",value:q.b},{label:"Вариант C",value:q.c},{label:"Вариант D",value:q.d},
+    {label:"Правильный вариант (A, B, C или D)",value:q.correct}
+  ],async v=>{
+    const correct=v[5].trim().toUpperCase();
+    if(!["A","B","C","D"].includes(correct)){uiAlert("Правильный вариант должен быть A, B, C или D.");return false}
+    if(!v[0].trim()||!v[1].trim()||!v[2].trim()||!v[3].trim()||!v[4].trim()){uiAlert("Заполните вопрос и все 4 варианта ответа.");return false}
+    const nq={q:v[0].trim(),a:v[1].trim(),b:v[2].trim(),c:v[3].trim(),d:v[4].trim(),correct,meta:q.meta||{}};
+    const merged=Object.assign({},EXAMBANK);merged[cat]=(merged[cat]||[]).slice();
+    if(isNew)merged[cat].push(nq);else merged[cat][i]=nq;
+    await P.db.doc("cms/main/examBank").set(merged);
+  },isNew?{}:{del:async()=>{const merged=Object.assign({},EXAMBANK);merged[cat]=merged[cat].slice();merged[cat].splice(i,1);await P.db.doc("cms/main/examBank").set(merged)}});
+}
+function bindExamBank(){
+  const f=document.getElementById("ebfile");
+  if(f)f.onchange=async()=>{
+    const file=f.files[0];if(!file)return;const m=document.getElementById("ebmsg");m.textContent="Разбираю файл…";
+    try{
+      const parsed=await parseWorkbook(file);
+      const cats=Object.keys(parsed);
+      if(!cats.length){m.textContent="Не нашёл ни одного распознанного вопроса в файле — проверьте формат столбцов.";return}
+      const merged=Object.assign({},EXAMBANK,parsed);
+      await P.db.doc("cms/main/examBank").set(merged);
+      m.textContent=`Загружено разделов: ${cats.length} (${cats.reduce((n,c)=>n+parsed[c].length,0)} вопросов).`;
+    }catch(e){m.textContent="Не удалось прочитать файл: "+(e&&e.message?e.message:e)}
+    f.value="";
+  };
+  app.querySelectorAll("[data-ebdelcat]").forEach(b=>b.onclick=async()=>{
+    const cat=b.dataset.ebdelcat;if(!await uiConfirm(`Удалить весь раздел «${cat}» из банка аттестации вместе со всеми вопросами?`))return;
+    const merged=Object.assign({},EXAMBANK);delete merged[cat];
+    try{await P.db.doc("cms/main/examBank").set(merged)}catch(e){uiAlert("Нет прав на запись.")}
+  });
+  app.querySelectorAll("[data-ebdelq]").forEach(b=>b.onclick=async()=>{
+    const [cat,i]=b.dataset.ebdelq.split(":");
+    if(!await uiConfirm("Удалить этот вопрос?"))return;
+    const merged=Object.assign({},EXAMBANK);merged[cat]=merged[cat].slice();merged[cat].splice(+i,1);
+    try{await P.db.doc("cms/main/examBank").set(merged)}catch(e){uiAlert("Нет прав на запись.")}
+  });
+  app.querySelectorAll("[data-ebedit]").forEach(b=>b.onclick=()=>{const [cat,i]=b.dataset.ebedit.split(":");ebQuestionModal(cat,+i)});
+  app.querySelectorAll("[data-ebadd]").forEach(b=>b.onclick=()=>ebQuestionModal(b.dataset.ebadd,null));
+  const nc=document.getElementById("ebnewcat");if(nc)nc.onclick=async()=>{
+    const name=await uiPrompt("Название нового раздела аттестации");if(!name||!name.trim())return;
+    const merged=Object.assign({},EXAMBANK);if(!merged[name.trim()])merged[name.trim()]=[];
+    try{await P.db.doc("cms/main/examBank").set(merged);ebQuestionModal(name.trim(),null)}catch(e){uiAlert("Нет прав на запись.")}
+  };
+}
+
+/* ----- редактор лекции ----- */
+const ETABS=[["main","Основное"],["lec","Конспект"],["defect","Найди дефект (упражнения)"],["links","Видео, ссылки, фото"],["check","Чек-лист"],["norms","Норматив РК"],["ok","Эталон «Посмотри»"],["des","Замечание DES"],["quiz","Блиц-тест"]];
 function edStart(id,sec){
   if(id){const l=ALL.find(x=>x.id===id);if(!l)return false;ED=clone(l)}
   else{const nums=ALL.filter(x=>x.s===sec).map(x=>parseInt(x.id.replace(/^\D+/,""))||0);ED={id:sec+(Math.max(0,...nums)+1),s:sec,t:"",sc:"conc",kw:"",d:[],c:[],p:"",n:[],ok:[],a:"",notes:"",vids:[],gal:[],photo:null,okPhoto:null,hidden:false,isNew:true}}
@@ -804,19 +877,19 @@ function editorPage(tab){
   const l=ED,up=!!P.assets;tab=ETABS.some(t=>t[0]===tab)?tab:"main";
   const t={};
   t.main=`<div class="form">
-   <label>Название урока<input class="inp" data-e="t" value="${esc(l.t)}"></label>
+   <label>Название лекции<input class="inp" data-e="t" value="${esc(l.t)}"></label>
    <label>Что смотреть в проекте<input class="inp" data-e="p" value="${esc(l.p)}" placeholder="АР — узел примыкания, лист…"></label>
    <label>Ключевые слова для автоматических подборок видео и фото<input class="inp" data-e="kw" value="${esc(l.kw)}" placeholder="например: монтаж оконного блока ПВХ"></label>
    <label>Наставник: на что обратить внимание (блок «Посмотри»). Строки, начинающиеся с «- », станут списком; **текст** — жирным<textarea class="inp" rows="6" data-e="notes">${esc(l.notes)}</textarea></label>
-   <label class="row"><input type="checkbox" data-b="hidden" ${l.hidden?"checked":""}> Скрыть урок от абитуриентов</label></div>`;
-  t.lec=`<p class="mut sm">Лекция показывается абитуриенту отдельным разделом урока сразу после «Посмотри». Добавляйте блоки в нужном порядке.</p>
+   <label class="row"><input type="checkbox" data-b="hidden" ${l.hidden?"checked":""}> Скрыть лекцию от абитуриентов</label></div>`;
+  t.lec=`<p class="mut sm">Конспект показывается абитуриенту отдельным разделом сразу после «Посмотри». Добавляйте блоки в нужном порядке.</p>
    <div id="leclist">${l.lec.map((b,i)=>`<div class="lecb"><div class="row" style="justify-content:space-between"><b>${{h:"Заголовок",p:"Текст",note:"Важно",img:"Слайдер фото",row:"Лента фото (слева направо)",link:"Ссылка"}[b.t]}</b><span class="row"><button class="btn" data-lmv="${i}:-1" aria-label="Выше">↑</button><button class="btn" data-lmv="${i}:1" aria-label="Ниже">↓</button><button class="btn" data-ldel="${i}">Удалить</button></span></div>
      ${b.t==="h"?`<input class="inp" data-lb="${i}" data-lk="v" value="${esc(b.v||"")}" placeholder="Заголовок раздела">`:""}
      ${b.t==="p"||b.t==="note"?`<textarea class="inp" rows="${b.t==="p"?6:3}" data-lb="${i}" data-lk="v" placeholder="Текст. Строки с «- » станут списком, **так** — жирный">${esc(b.v||"")}</textarea>`:""}
      ${b.t==="img"||b.t==="row"?`<div class="gal">${imgsOf(b).map((g,j)=>`<figure><img src="${blobUrl(g.id)}" alt=""><input class="inp" data-lbi="${i}:${j}" value="${esc(g.cap||"")}" placeholder="Подпись к фото ${j+1}"><button class="btn sm" data-lbd="${i}:${j}">Удалить фото</button></figure>`).join("")}</div><label class="btn ${up?"":"disabled"}" style="justify-self:start">＋ Фото в этот блок<input type="file" accept="image/*" multiple hidden data-lba="${i}" ${up?"":"disabled"}></label>`:""}
-     ${b.t==="link"?`<div class="form"><input class="inp" data-lb="${i}" data-lk="v" value="${esc(b.v||"")}" placeholder="Текст ссылки"><input class="inp" data-lb="${i}" data-lk="u" value="${esc(b.u||"")}" placeholder="https://…"></div>`:""}</div>`).join("")||`<p class="mut">Лекция пустая.</p>`}</div>
+     ${b.t==="link"?`<div class="form"><input class="inp" data-lb="${i}" data-lk="v" value="${esc(b.v||"")}" placeholder="Текст ссылки"><input class="inp" data-lb="${i}" data-lk="u" value="${esc(b.u||"")}" placeholder="https://…"></div>`:""}</div>`).join("")||`<p class="mut">Конспект пустой.</p>`}</div>
    <div class="row" style="margin-top:10px"><button class="btn" data-ladd="h">＋ Заголовок</button><button class="btn" data-ladd="p">＋ Текст</button><button class="btn" data-ladd="note">＋ Важно</button><label class="btn ${up?"":"disabled"}">＋ Слайдер фото<input type="file" accept="image/*" multiple hidden id="lecimg" ${up?"":"disabled"}></label><label class="btn ${up?"":"disabled"}">＋ Лента фото<input type="file" accept="image/*" multiple hidden id="lecrow" ${up?"":"disabled"}></label><button class="btn" data-ladd="link">＋ Ссылка</button></div>
-   <details style="margin-top:14px"><summary>Предпросмотр лекции</summary><div class="lec blk">${lecHTML(l.lec)||"<p class='mut'>Пусто</p>"}</div></details>`;
+   <details style="margin-top:14px"><summary>Предпросмотр конспекта</summary><div class="lec blk">${lecHTML(l.lec)||"<p class='mut'>Пусто</p>"}</div></details>`;
   t.defect=`<div class="extabs">${[{t:ED.et||"Упражнение 1"},...ED.ex].map((e,k)=>`<button type="button" class="${k===ED.exi?"on":""}" data-exsel="${k}">${k+1}. ${esc(e.t||`Упражнение ${k+1}`)} (${(k?e.d:ED.d).length})</button>`).join("")}<button type="button" class="btn edit sm" data-exnew>＋ Упражнение</button></div>
    <div class="row" style="margin:8px 0 12px"><label style="flex:1">Название упражнения <input class="inp" data-ext value="${esc(ED.exi?TG().t||"":ED.et||"")}" placeholder="Упражнение ${ED.exi+1}" style="width:100%"></label>${ED.exi?`<button class="btn" data-exdel2>Удалить упражнение</button>`:""}</div>
    <div class="row" style="margin-bottom:10px">
@@ -848,7 +921,7 @@ function editorPage(tab){
    <h3 style="font-size:16px;margin:18px 0 6px">Варианты ответов в замечании</h3>
    ${DQ?`<p class="mut sm">Отметьте галочкой верные варианты. Абитуриенту варианты показываются вперемешку.</p>${DES_G.map(([g,title,multi])=>`<div class="dqe"><h4>${title}</h4>${(DQ[g]||[]).map((o,j)=>`<div class="row dqrow"><label class="row sm" style="gap:4px"><input type="${multi?"checkbox":"radio"}" name="dqok_${g}" data-dqc="${g}:${j}" ${o[1]?"checked":""}> верный</label><textarea class="inp" rows="1" data-dqt="${g}:${j}" style="flex:1">${esc(o[0]||"")}</textarea><button class="btn sm" data-dqd="${g}:${j}">Удалить</button></div>`).join("")}<button class="btn edit sm" data-dqa="${g}">＋ Вариант</button></div>`).join("")}
      <button class="btn sm" data-dqoff style="margin-top:10px">Вернуть автоматические варианты</button>`
-   :`<p class="mut sm">Сейчас варианты создаются автоматически из дефектов, нормативов и действий урока (плюс ложные варианты из других уроков).</p><button class="btn edit" data-dqon>✎ Заполнить и редактировать вручную</button>`}
+   :`<p class="mut sm">Сейчас варианты создаются автоматически из дефектов, нормативов и действий лекции (плюс ложные варианты из других лекций).</p><button class="btn edit" data-dqon>✎ Заполнить и редактировать вручную</button>`}
    <p class="mut sm" style="margin-top:14px">Предпросмотр эталонного замечания:</p><div class="des-pre" id="edes">${desText(l,{},l.d.map(()=>true))}</div>`;
   t.quiz=`<p class="mut sm">Напишите вопросы и варианты ответов, отметьте правильный кружком. При прохождении программа сравнит ответ абитуриента с отмеченным вами — засчитывается только правильный.</p>
    <label class="row" style="margin:6px 0 12px"><input type="checkbox" data-b="qauto" ${ED.qauto?"checked":""}> Дополнять тест автоматическими вопросами, если моих вопросов меньше 5</label>
@@ -857,12 +930,12 @@ function editorPage(tab){
      ${q.opts.map((o,j)=>`<div class="row qopt"><label class="row sm" style="gap:4px"><input type="radio" name="qok_${i}" data-qok="${i}:${j}" ${q.ok===j?"checked":""}> правильный</label><input class="inp" style="flex:1" data-qo="${i}:${j}" value="${esc(o)}" placeholder="Вариант ответа ${j+1}">${q.opts.length>2?`<button class="btn sm" data-qodel="${i}:${j}" aria-label="Удалить вариант">✕</button>`:""}</div>`).join("")}
      <button class="btn sm" data-qoadd="${i}">＋ Вариант ответа</button></div>`).join("")||`<p class="mut">Своих вопросов пока нет — тест создаётся автоматически.</p>`}</div>
    <button class="btn edit" id="qzadd" style="margin-top:10px">＋ Добавить вопрос</button>`;
-  return `<div class="crumbs"><a href="#/mentor">Кабинет наставника</a> / ${l.isNew?"Новый урок":"Редактирование"} ${l.id}</div>
-  <h1 style="font-size:clamp(22px,3.5vw,30px);margin-bottom:12px">${l.isNew?"Новый урок":"Урок"} ${l.id}${l.t?": "+esc(l.t):""}</h1>
+  return `<div class="crumbs"><a href="#/mentor">Кабинет наставника</a> / ${l.isNew?"Новая лекция":"Редактирование"} ${l.id}</div>
+  <h1 style="font-size:clamp(22px,3.5vw,30px);margin-bottom:12px">${l.isNew?"Новая лекция":"Лекция"} ${l.id}${l.t?": "+esc(l.t):""}</h1>
   ${up?"":`<p class="note">Загрузка фото доступна только наставникам (роль mentor/owner).</p>`}
   <nav class="mtabs">${ETABS.map(x=>`<a href="#/mentor/edit/${l.id}/${x[0]}" class="${x[0]===tab?"on":""}">${x[1]}</a>`).join("")}</nav>
   <div class="blk">${t[tab]}</div>
-  <div class="row edbar no-print"><button class="btn pri" id="edsave">Сохранить урок</button>${l.isNew?"":`<a class="btn" href="#/l/${l.id}">Посмотреть урок</a>`}${l.base&&l.edited?`<button class="btn" id="edrev">Вернуть базовую версию</button>`:""}<a class="btn" href="#/mentor">К списку уроков</a><span class="sm" id="edmsg">${l._ch?"Есть несохранённые изменения":esc(FLASH)}</span></div>`;
+  <div class="row edbar no-print"><button class="btn pri" id="edsave">Сохранить лекцию</button>${l.isNew?"":`<a class="btn" href="#/l/${l.id}">Посмотреть лекцию</a>`}${l.base&&l.edited?`<button class="btn" id="edrev">Вернуть базовую версию</button>`:""}<a class="btn" href="#/mentor">К списку лекций</a><span class="sm" id="edmsg">${l._ch?"Есть несохранённые изменения":esc(FLASH)}</span></div>`;
 }
 function mark(){ED._ch=true;dirty=true;const m=document.getElementById("edmsg");if(m)m.textContent="Есть несохранённые изменения"}
 function edCanvas(){
@@ -910,10 +983,10 @@ function bindEditor(tab){
   const okd=document.getElementById("edokdel");if(okd)okd.onclick=()=>{ED.okPhoto=null;mark();render()};
   const gal=document.getElementById("edgal");if(gal)gal.onchange=async()=>{for(const f of gal.files){const r=await uploadImg(f);if(r)ED.gal.push({id:r.id,cap:""})}mark();render()};
   const gl=document.getElementById("edgallist");if(gl){gl.addEventListener("input",e=>{if(e.target.dataset.gi!=null){ED.gal[+e.target.dataset.gi].cap=e.target.value;mark()}});gl.addEventListener("click",e=>{if(e.target.dataset.gdel!=null){ED.gal.splice(+e.target.dataset.gdel,1);mark();render()}})}
-  // лекция
+  // конспект
   on("[data-ladd]","click",e=>{const t=e.target.dataset.ladd;ED.lec.push(t==="link"?{t,v:"",u:""}:{t,v:""});mark();render()});
   on("[data-lb]","input",e=>{ED.lec[+e.target.dataset.lb][e.target.dataset.lk]=e.target.value;mark()});
-  on("[data-ldel]","click",async e=>{if(!await uiConfirm("Удалить блок лекции?"))return;ED.lec.splice(+e.target.dataset.ldel,1);mark();render()});
+  on("[data-ldel]","click",async e=>{if(!await uiConfirm("Удалить блок конспекта?"))return;ED.lec.splice(+e.target.dataset.ldel,1);mark();render()});
   on("[data-lmv]","click",e=>{const [i,dl]=e.target.dataset.lmv.split(":").map(Number);const j=i+dl;if(j<0||j>=ED.lec.length)return;[ED.lec[i],ED.lec[j]]=[ED.lec[j],ED.lec[i]];mark();render()});
   const li=document.getElementById("lecimg");if(li)li.onchange=async()=>{const add=await uploadMany(li.files);if(add.length){ED.lec.push({t:"img",imgs:add});mark();render()}};
   const lr=document.getElementById("lecrow");if(lr)lr.onchange=async()=>{const add=await uploadMany(lr.files);if(add.length){ED.lec.push({t:"row",imgs:add});mark();render()}};
@@ -942,11 +1015,11 @@ function bindEditor(tab){
   on("[data-qoadd]","click",e=>{ED.qz[+e.target.dataset.qoadd].opts.push("");mark();render()});
   on("[data-qdel]","click",async e=>{const i=+e.target.dataset.qdel;if(!await uiConfirm(`Удалить вопрос ${i+1}?`))return;ED.qz.splice(i,1);mark();render()});
   document.getElementById("edsave").onclick=edSave;
-  const rv=document.getElementById("edrev");if(rv)rv.onclick=async()=>{if(!await uiConfirm("Удалить все изменения наставника и вернуть исходную версию урока?"))return;try{await P.db.doc("cms/main/lessons/"+ED.id).delete();ED=null;FLASH="Урок возвращён к базовой версии.";location.hash="#/mentor"}catch(e){uiAlert("Не удалось: нет прав на запись.")}};
+  const rv=document.getElementById("edrev");if(rv)rv.onclick=async()=>{if(!await uiConfirm("Удалить все изменения наставника и вернуть исходную версию лекции?"))return;try{await P.db.doc("cms/main/lessons/"+ED.id).delete();ED=null;FLASH="Лекция возвращена к базовой версии.";location.hash="#/mentor"}catch(e){uiAlert("Не удалось: нет прав на запись.")}};
 }
 async function edSave(){
   const msg=document.getElementById("edmsg");
-  if(!ED.t.trim()){uiAlert("Введите название урока (вкладка «Основное»).");return}
+  if(!ED.t.trim()){uiAlert("Введите название лекции (вкладка «Основное»).");return}
   const exs=[ED.d,...ED.ex.map(e=>e.d)];for(let q=0;q<exs.length;q++){const bad=exs[q].findIndex(d=>!d[3].trim());if(bad>=0){uiAlert(`Упражнение ${q+1}: заполните название дефекта № ${bad+1} (вкладка «Найди дефект»).`);ED.exi=q;return}}
   const badL=[...(ED.vidsSet?ED.vids:[]),...(ED.lnkSet?ED.lnk:[])].find(v=>v[1]&&!/^https?:\/\//.test(v[1]));if(badL){uiAlert(`Ссылка должна начинаться с http:// или https:// — проверьте: ${badL[1]}`);return}
   const badQ=ED.qz.findIndex(q=>(q.q.trim()||q.opts.some(o=>String(o).trim()))&&!validQ(q));if(badQ>=0){uiAlert(`Вопрос ${badQ+1}: нужен текст вопроса, минимум два варианта ответа и отмеченный правильный вариант.`);return}
@@ -954,8 +1027,8 @@ async function edSave(){
   ED.n=ED.n.filter(n=>String(n[0]).trim());
   const out={ex:ED.ex.map(e=>({t:e.t||"",sc:e.sc||"conc",d:e.d||[],photo:e.photo||null})),et:ED.et||"",id:ED.id,t:ED.t.trim(),sc:ED.sc||"conc",kw:ED.kw||ED.t,d:ED.d,c:ED.c,p:ED.p,n:ED.n,ok:ED.ok,a:ED.a,notes:ED.notes,vids:ED.vids.filter(validLink),lnk:ED.lnk.filter(validLink),auto:ED.auto!==false,vidsSet:!!ED.vidsSet,lnkSet:!!ED.lnkSet,stt:ED.stt||{},sti:ED.sti||{},cap:ED.cap||"",gal:ED.gal,lec:ED.lec,qz:ED.qz.map(normQ).filter(validQ),qauto:!!ED.qauto,desq:ED.desq?Object.fromEntries(DES_G.map(([g])=>[g,(ED.desq[g]||[]).filter(o=>String(o[0]).trim())])):null,desex:ED.desex||{},photo:ED.photo||null,okPhoto:ED.okPhoto||null,hidden:!!ED.hidden,upd:now(),by:P.uid||""};
   msg.textContent="Сохраняю…";
-  try{await P.db.doc("cms/main/lessons/"+ED.id).set(clone(out));FLASH="Урок сохранён "+new Date().toLocaleTimeString("ru-RU")+" — изменения уже видны абитуриентам.";ED._ch=false;dirty=false;ED.isNew=false;ED.edited=true;msg.textContent=FLASH}
-  catch(e){msg.textContent=e&&e.code==="quota_exceeded"?"База заполнена — удалите ненужные уроки.":"Не сохранено: нет прав на запись (нужна роль «Наставник»)."}
+  try{await P.db.doc("cms/main/lessons/"+ED.id).set(clone(out));FLASH="Лекция сохранена "+new Date().toLocaleTimeString("ru-RU")+" — изменения уже видны абитуриентам.";ED._ch=false;dirty=false;ED.isNew=false;ED.edited=true;msg.textContent=FLASH}
+  catch(e){msg.textContent=e&&e.code==="quota_exceeded"?"База заполнена — удалите ненужные лекции.":"Не сохранено: нет прав на запись (нужна роль «Наставник»)."}
 }
 
 /* ----- журнал абитуриентов ----- */
@@ -968,10 +1041,9 @@ function tStats(r){const ids=LS.map(l=>l.id),lp2=r.lp||{};const done=ids.filter(
 function accOf(uid){const a=JR&&JR.acc&&JR.acc[uid];if(a&&Array.isArray(a.secs))return a.secs;return CFG.accDef==="none"?[]:SEC.map(s=>s[0])}
 async function accSet(uid,secs,msgEl){try{await P.db.doc("cms/main/access/"+uid).set({secs,upd:now(),by:P.uid||""});JR.acc[uid]={secs};if(msgEl){msgEl.textContent="Сохранено "+new Date().toLocaleTimeString("ru-RU")}return true}catch(e){if(msgEl)msgEl.textContent="Не сохранено: нет прав на запись.";return false}}
 function accMatrix(rows){return `<p class="mut sm">Отметьте, какие разделы видит и проходит каждый абитуриент. Изменения сохраняются сразу — абитуриент увидит новый набор разделов без перезагрузки страницы. Новым абитуриентам по умолчанию ${CFG.accDef==="none"?"<b>закрыты все разделы</b>":"<b>открыты все разделы</b>"} (меняется в «Настройках»).</p>
-  <div class="blk"><div class="tbl-wrap"><table class="nt acc"><tr><th>ФИО</th>${SEC.map(s=>`<th title="${esc(s[1])}" style="text-align:center">${s[0]}</th>`).join("")}<th>Быстро</th></tr>
-  ${rows.map(r=>{const a=accOf(r.uid);return `<tr><td>${esc(r.prof.fio)}<div class="mut sm">${esc(r.prof.spec||"")}</div></td>${SEC.map(s=>`<td style="text-align:center"><input type="checkbox" class="accb" data-u="${esc(r.uid)}" data-s="${s[0]}" ${a.includes(s[0])?"checked":""} aria-label="${esc(r.prof.fio)}: раздел ${s[0]}"></td>`).join("")}<td style="white-space:nowrap"><button class="btn sm" data-accall="${esc(r.uid)}">Все</button> <button class="btn sm" data-accnone="${esc(r.uid)}">Снять</button></td></tr>`}).join("")||`<tr><td colspan="${SEC.length+2}" class="mut">Пока никто не зарегистрировался.</td></tr>`}</table></div>
-  <div class="row" style="margin-top:10px"><span class="sm" id="accmsg"></span></div>
-  <details class="sm" style="margin-top:10px" open><summary>Расшифровка разделов</summary>${SEC.map(s=>`<div><b>${s[0]}</b> — ${esc(s[1])}</div>`).join("")}</details></div>`}
+  <div class="blk"><div class="tbl-wrap"><table class="nt acc"><tr><th>ФИО</th>${SEC.map(s=>`<th title="${esc(s[1])}" style="text-align:center;white-space:nowrap">${esc(s[1])}</th>`).join("")}<th>Быстро</th></tr>
+  ${rows.map(r=>{const a=accOf(r.uid);return `<tr><td>${esc(r.prof.fio)}<div class="mut sm">${esc(r.prof.spec||"")}</div></td>${SEC.map(s=>`<td style="text-align:center"><input type="checkbox" class="accb" data-u="${esc(r.uid)}" data-s="${s[0]}" ${a.includes(s[0])?"checked":""} aria-label="${esc(r.prof.fio)}: раздел ${esc(s[1])}"></td>`).join("")}<td style="white-space:nowrap"><button class="btn sm" data-accall="${esc(r.uid)}">Все</button> <button class="btn sm" data-accnone="${esc(r.uid)}">Снять</button></td></tr>`}).join("")||`<tr><td colspan="${SEC.length+2}" class="mut">Пока никто не зарегистрировался.</td></tr>`}</table></div>
+  <div class="row" style="margin-top:10px"><span class="sm" id="accmsg"></span></div></div>`}
 function journalPage(){
   if(!JR){loadJournal();return `<h1 style="font-size:clamp(24px,4vw,34px)">Журнал абитуриентов</h1>${mNav("j")}<p>Загрузка…</p>`}
   if(JR.loading)return `<h1 style="font-size:clamp(24px,4vw,34px)">Журнал абитуриентов</h1>${mNav("j")}<p>Загрузка…</p>`;
@@ -980,26 +1052,49 @@ function journalPage(){
   ${JR.err?`<p class="note">Журнал не загрузился. Обновите страницу.</p>`:""}
   <div class="row" style="margin:10px 0"><input class="inp" id="jq" placeholder="Поиск по ФИО, специальности, объекту" value="${esc(JR.q||"")}" style="min-width:280px"><button class="btn" id="jre">Обновить</button>${P.dl?`<button class="btn pri" id="jcsv">Скачать журнал (CSV для Excel)</button>`:""}<button class="btn" id="jpr">Печать</button></div>
   <div class="extabs"><button type="button" class="${JR.view==="acc"?"":"on"}" data-jv="list">Журнал</button><button type="button" class="${JR.view==="acc"?"on":""}" data-jv="acc">Доступ к разделам ✓</button></div>
-  <p class="mut sm">Абитуриентов: ${JR.rows.length}. Уроков в курсе: ${LS.length}.</p>${JR.view==="acc"?accMatrix(rows):`
-  <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th>ФИО</th><th>Специальность</th><th>Уровень</th><th>В школе с</th><th>Уроков освоено</th><th>Разделов закрыто</th><th>Ср. тест</th><th>Дефекты</th><th>Посл. активность</th><th>Аттестация</th><th>Открыто разделов</th></tr>
-  ${rows.map(r=>{const s=tStats(r);return `<tr><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=80?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td></tr>`}).join("")||`<tr><td colspan="11" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на школу с абитуриентами.</td></tr>`}</table></div></div>`}`;
+  <p class="mut sm">Абитуриентов: ${JR.rows.length}. Лекций в курсе: ${LS.length}.</p>${JR.view==="acc"?accMatrix(rows):`
+  <div class="blk no-print"><h2 style="font-size:16px">Назначить курс</h2><p class="mut sm">Отметьте абитуриентов в таблице ниже, выберите раздел и нажмите «Назначить» — им откроется доступ к разделу, и (если настроена отправка писем) придёт e-mail со ссылкой на сайт.</p>
+  <div class="row"><select class="inp" id="asgsec">${SEC.map(s=>`<option value="${s[0]}">${esc(s[1])}</option>`).join("")}</select><button class="btn pri" id="asggo">Назначить выбранным</button><span class="sm" id="asgmsg"></span></div></div>
+  <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th></th><th>ФИО</th><th>Специальность</th><th>Уровень</th><th>Лекции с</th><th>Лекций освоено</th><th>Разделов закрыто</th><th>Ср. тест</th><th>Дефекты</th><th>Посл. активность</th><th>Аттестация</th><th>Открыто разделов</th><th></th></tr>
+  ${rows.map(r=>{const s=tStats(r);return `<tr><td><input type="checkbox" class="trsel" value="${esc(r.uid)}"></td><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=80?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td><td><button class="btn sm" data-deltr="${esc(r.uid)}" title="Удалить абитуриента">✕</button></td></tr>`}).join("")||`<tr><td colspan="13" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на школу с абитуриентами.</td></tr>`}</table></div></div>`}`;
+}
+async function assignCourse(uids,secKey,msgEl){
+  const secLabel=secName(secKey)||secKey;
+  msgEl.textContent="Назначаю доступ…";
+  for(const uid of uids){
+    const cur=accOf(uid);
+    if(!cur.includes(secKey))await accSet(uid,[...cur,secKey]);
+  }
+  msgEl.textContent="Доступ назначен. Отправляю уведомления…";
+  try{
+    const r=await notifyAssignment({uids,category:secLabel,siteUrl:location.origin});
+    const ok=(r&&r.results||[]).filter(x=>x.ok).length;
+    msgEl.textContent=`Доступ назначен (${uids.length}). Писем отправлено: ${ok} из ${uids.length}.`;
+  }catch(e){
+    msgEl.textContent=`Доступ назначен (${uids.length}). Письма не отправлены: функция уведомлений ещё не настроена.`;
+  }
+}
+async function deleteTrainee(uid,fio){
+  if(!await uiConfirm(`Удалить абитуриента «${fio}» из журнала вместе со всем прогрессом? Это необратимо.`,"Удалить"))return false;
+  try{await P.db.doc("trainees/"+uid).delete();try{await P.db.doc("cms/main/access/"+uid).delete()}catch(e){}return true}
+  catch(e){uiAlert("Не удалось удалить: нет прав на запись.");return false}
 }
 function traineePage(uid){
   if(!JR||JR.loading){if(!JR)loadJournal();return `<p>Загрузка…</p>`}
   const r=JR.rows.find(x=>x.uid===uid);if(!r)return notFound();const lp2=r.lp||{},s=tStats(r);
   return `<div class="crumbs no-print"><a href="#/mentor/journal">Журнал абитуриентов</a> / ${esc(r.prof.fio)}</div>
-  <div class="blk"><h1 style="font-size:clamp(22px,3.5vw,30px)">${esc(r.prof.fio)}</h1><p class="mut">${esc(r.prof.spec||"")} · ${esc(r.prof.lvl||"")}${r.prof.obj?" · "+esc(r.prof.obj):""} · в школе с ${fd(r.prof.reg)}</p>
-  <div class="stat"><div><b>${s.done}/${LS.length}</b>уроков пройдено</div><div><b>${s.avg!=null?s.avg+"%":"—"}</b>средний балл тестов</div><div><b>${s.fp!=null?s.fp+"%":"—"}</b>дефектов найдено</div><div><b>${(r.ex||[]).length}</b>аттестаций</div></div>
-  <button class="btn no-print" id="jpr">Печать карточки</button></div>
+  <div class="blk"><h1 style="font-size:clamp(22px,3.5vw,30px)">${esc(r.prof.fio)}</h1><p class="mut">${esc(r.prof.spec||"")} · ${esc(r.prof.lvl||"")}${r.prof.obj?" · "+esc(r.prof.obj):""} · лекции с ${fd(r.prof.reg)}</p>
+  <div class="stat"><div><b>${s.done}/${LS.length}</b>лекций пройдено</div><div><b>${s.avg!=null?s.avg+"%":"—"}</b>средний балл тестов</div><div><b>${s.fp!=null?s.fp+"%":"—"}</b>дефектов найдено</div><div><b>${(r.ex||[]).length}</b>аттестаций</div></div>
+  <button class="btn no-print" id="jpr">Печать карточки</button> <button class="btn no-print" data-deltr="${esc(uid)}" title="Удалить абитуриента">Удалить абитуриента</button></div>
   <div class="blk no-print"><h2 style="font-size:16px;margin-bottom:8px">Доступ к разделам</h2><p class="mut sm">Отмеченные разделы абитуриент видит на экране и может проходить.</p>
   <div class="chk">${SEC.map(sc=>`<label><input type="checkbox" class="accb" data-u="${esc(uid)}" data-s="${sc[0]}" ${accOf(uid).includes(sc[0])?"checked":""}><span>${sc[0]}. ${esc(sc[1])}</span></label>`).join("")}</div>
   <div class="row" style="margin-top:8px"><button class="btn sm" data-accall="${esc(uid)}">Открыть все</button><button class="btn sm" data-accnone="${esc(uid)}">Закрыть все</button><span class="sm" id="accmsg"></span></div></div>
   ${(r.ex||[]).length?`<div class="blk"><h2 style="font-size:16px">Аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
-  ${SEC.map(sc=>`<div class="blk"><h2 style="font-size:16px">${sc[0]}. ${esc(sc[1])}${LS.filter(l=>l.s===sc[0]).every(l=>lp2[l.id]&&lp2[l.id].p)?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Урок</th><th>Начат</th><th>Шаги</th><th>Найди дефект</th><th>DES</th><th>Тест (попыток)</th><th>Освоен</th></tr>${LS.filter(l=>l.s===sc[0]).map(l=>{const x=lp2[l.id]||{};return `<tr><td>${l.id}. ${esc(l.t)}</td><td>${fd(x.o)}</td><td>${lessonSteps(l).filter(s=>x.v&&x.v[s]).length}/${lessonSteps(l).length}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}${x.seen&&!x.fall?" · смотрел ответы":""}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?`ошибки (${x.da})`:"—"}</td><td>${x.q!=null?`${x.q}% (${x.qa||1})`:"—"}</td><td>${x.p?fd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
+  ${SEC.map(sc=>`<div class="blk"><h2 style="font-size:16px">${sc[0]}. ${esc(sc[1])}${LS.filter(l=>l.s===sc[0]).every(l=>lp2[l.id]&&lp2[l.id].p)?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Шаги</th><th>Найди дефект</th><th>DES</th><th>Тест (попыток)</th><th>Освоен</th></tr>${LS.filter(l=>l.s===sc[0]).map(l=>{const x=lp2[l.id]||{};return `<tr><td>${l.id}. ${esc(l.t)}</td><td>${fd(x.o)}</td><td>${lessonSteps(l).filter(s=>x.v&&x.v[s]).length}/${lessonSteps(l).length}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}${x.seen&&!x.fall?" · смотрел ответы":""}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?`ошибки (${x.da})`:"—"}</td><td>${x.q!=null?`${x.q}% (${x.qa||1})`:"—"}</td><td>${x.p?fd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
 }
 async function journalCsv(btn){
   const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
-  const head=["ФИО","Специальность","Уровень","Объект","В школе с","Освоено уроков","Всего уроков","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Дата аттестации","Открытые разделы",...LS.map(l=>"Пройден "+l.id)];
+  const head=["ФИО","Специальность","Уровень","Объект","Лекции с","Освоено лекций","Всего лекций","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Дата аттестации","Открытые разделы",...LS.map(l=>"Пройден "+l.id)];
   const body=JR.rows.map(r=>{const s=tStats(r),lp2=r.lp||{};return[r.prof.fio,r.prof.spec,r.prof.lvl,r.prof.obj,fdd(r.prof.reg),s.done,LS.length,s.avg,s.fp,fd(s.last),s.ex?s.ex.pc:"",s.ex?fdd(s.ex.date):"",accOf(r.uid).join(" "),...LS.map(l=>lp2[l.id]&&lp2[l.id].p?fdd(lp2[l.id].p):"")].map(q).join(";")});
   try{await P.dl.save({filename:"zhurnal-shkola-tn-"+new Date().toISOString().slice(0,10)+".csv",data:"\ufeff"+[head.map(q).join(";"),...body].join("\r\n")})}catch(e){if(e&&e.code!=="cancelled")uiAlert("Скачивание недоступно в этом окне.")}
 }
@@ -1010,6 +1105,7 @@ function render(){
   if(!P.ready){if(top)top.classList.add("hidden");if(foot)foot.classList.add("hidden");app.innerHTML=`<div class="blk"><p>Загрузка…</p></div>`;return}
   if(!P.authed){if(top)top.classList.add("hidden");if(foot)foot.classList.add("hidden");app.innerHTML="";mountLoginScreen(app);return}
   if(top)top.classList.remove("hidden");if(foot)foot.classList.remove("hidden");if(signout)signout.classList.remove("hidden");
+  const sn=document.getElementById("sitename");if(sn)sn.textContent=CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»";
   rebuild();
   const h=(location.hash||"#/").replace(/^#\/?/,"");const [p,a,b,c]=h.split("/");
   document.getElementById("upd").classList.add("hidden");
@@ -1025,6 +1121,7 @@ function render(){
     else if(a==="edit"){if((ED&&ED.id===b)||edStart(b))html=editorPage(c);else html=notFound()}
     else if(a==="journal")html=journalPage();
     else if(a==="t")html=traineePage(decodeURIComponent(b||""));
+    else if(a==="exam")html=examBankPage();
     else if(a==="settings")html=mentorSettings();
     else{html=mentorDash()}
   }
@@ -1038,15 +1135,16 @@ function bindPage(p,a,b,c){
   if(p==="mentor"){
     const mo=document.getElementById("mout");if(mo)mo.onclick=()=>signOut();
     if(a==="edit")bindEditor(c||"main");if(a==="new")bindEditor("main");
+    if(a==="exam")bindExamBank();
     if(!a){
       app.querySelectorAll("[data-ren]").forEach(bt=>bt.onclick=async()=>{const k=bt.dataset.ren;const n=await uiPrompt("Новое название раздела",secName(k));if(!n)return;try{await P.db.doc("cms/main/sections/"+k).set({k,name:n.trim(),hidden:false})}catch(e){uiAlert("Нет прав на запись.")}});
-      app.querySelectorAll("[data-hidesec]").forEach(bt=>bt.onclick=async()=>{const k=bt.dataset.hidesec;if(!await uiConfirm(`Удалить раздел ${k}? Его уроки перестанут показываться абитуриентам.`))return;try{await P.db.doc("cms/main/sections/"+k).set({k,name:secName(k),hidden:true})}catch(e){uiAlert("Нет прав на запись.")}});
+      app.querySelectorAll("[data-hidesec]").forEach(bt=>bt.onclick=async()=>{const k=bt.dataset.hidesec;if(!await uiConfirm(`Удалить раздел ${k}? Его лекции перестанут показываться абитуриентам.`))return;try{await P.db.doc("cms/main/sections/"+k).set({k,name:secName(k),hidden:true})}catch(e){uiAlert("Нет прав на запись.")}});
       app.querySelectorAll("[data-unhide]").forEach(bt=>bt.onclick=async()=>{const k=bt.dataset.unhide;try{await P.db.doc("cms/main/sections/"+k).set(Object.assign({},CSEC[k],{hidden:false}))}catch(e){uiAlert("Нет прав на запись.")}});
       const as=document.getElementById("addsec");if(as)as.onclick=async()=>{const n=await uiPrompt("Название нового раздела");if(!n)return;const used=new Set([...BASE_SEC.map(s=>s[0]),...Object.keys(CSEC)]);const k="KLMNOPQRSTUVWXYZ".split("").find(c=>!used.has(c));if(!k){uiAlert("Достигнут предел разделов.");return}try{await P.db.doc("cms/main/sections/"+k).set({k,name:n.trim(),hidden:false})}catch(e){uiAlert("Нет прав на запись.")}};
     }
     if(a==="settings"){
       document.getElementById("needall").onchange=async e=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{needAll:e.target.checked}));FLASH="Настройка сохранена."}catch(er){uiAlert("Нет прав на запись.")}};
-      document.getElementById("hsave").onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{heroTitle:document.getElementById("htitle").value.trim(),heroText:document.getElementById("htext").value.trim()}));FLASH="Тексты главной сохранены."}catch(er){uiAlert("Нет прав на запись.")}};
+      document.getElementById("hsave").onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{siteName:document.getElementById("hsite").value.trim(),heroTitle:document.getElementById("htitle").value.trim(),heroText:document.getElementById("htext").value.trim()}));FLASH="Тексты главной сохранены."}catch(er){uiAlert("Нет прав на запись.")}};
       document.getElementById("seq").onchange=async e=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{seq:e.target.checked}));FLASH="Настройка сохранена."}catch(er){uiAlert("Нет прав на запись.")}};
     }
     const accSave=async(uid,msg)=>{const secs=[...app.querySelectorAll(`.accb[data-u="${CSS.escape(uid)}"]`)].filter(x=>x.checked).map(x=>x.dataset.s);await accSet(uid,secs,msg)};
@@ -1054,8 +1152,18 @@ function bindPage(p,a,b,c){
     app.querySelectorAll("[data-accall],[data-accnone]").forEach(bt=>bt.onclick=()=>{const uid=bt.dataset.accall||bt.dataset.accnone,on=!!bt.dataset.accall;app.querySelectorAll(`.accb[data-u="${CSS.escape(uid)}"]`).forEach(x=>x.checked=on);accSave(uid,document.getElementById("accmsg"))});
     app.querySelectorAll("[data-jv]").forEach(bt=>bt.onclick=()=>{JR.view=bt.dataset.jv;render()});
     app.querySelectorAll('input[name="accdef"]').forEach(r=>r.onchange=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{accDef:r.value}));FLASH="Настройка доступа сохранена."}catch(e){uiAlert("Нет прав на запись.")}});
-    if(a==="journal"&&JR&&!JR.loading){const jq=document.getElementById("jq");jq.oninput=()=>{JR.q=jq.value;const pos=jq.selectionStart;render();const n=document.getElementById("jq");n.focus();n.setSelectionRange(pos,pos)};document.getElementById("jre").onclick=()=>{JR=null;render()};const c=document.getElementById("jcsv");if(c)c.onclick=()=>journalCsv(c)}
+    if(a==="journal"&&JR&&!JR.loading){const jq=document.getElementById("jq");jq.oninput=()=>{JR.q=jq.value;const pos=jq.selectionStart;render();const n=document.getElementById("jq");n.focus();n.setSelectionRange(pos,pos)};document.getElementById("jre").onclick=()=>{JR=null;render()};const c=document.getElementById("jcsv");if(c)c.onclick=()=>journalCsv(c)
+      const ag=document.getElementById("asggo");if(ag)ag.onclick=async()=>{
+        const uids=[...app.querySelectorAll(".trsel:checked")].map(x=>x.value);const m=document.getElementById("asgmsg");
+        if(!uids.length){m.textContent="Отметьте хотя бы одного абитуриента.";return}
+        const sec=document.getElementById("asgsec").value;
+        if(!await uiConfirm(`Назначить раздел «${secName(sec)}» выбранным абитуриентам (${uids.length})?`))return;
+        await assignCourse(uids,sec,m);
+      };}
     const jp=document.getElementById("jpr");if(jp)jp.onclick=()=>window.print();
+    app.querySelectorAll("[data-deltr]").forEach(bt=>bt.onclick=async()=>{
+      const uid=bt.dataset.deltr;const row=JR&&JR.rows.find(x=>x.uid===uid);const fio=row?row.prof.fio:"абитуриента";
+      if(await deleteTrainee(uid,fio)){JR=null;location.hash="#/mentor/journal"}});
     return;
   }
   if(!st.prof||p==="register"){document.getElementById("rgo").onclick=()=>{const fio=document.getElementById("rf").value.trim();if(fio.split(/\s+/).length<2){uiAlert("Введите фамилию и имя полностью.");return}st.prof={fio,spec:document.getElementById("rs").value.trim(),lvl:document.getElementById("rl").value,obj:document.getElementById("ro").value.trim(),reg:(st.prof&&st.prof.reg)||now()};save();location.hash=p==="register"?"#/progress":"#/";render()};return}
@@ -1075,7 +1183,7 @@ let lastHash=location.hash,skipHash=false;
 window.addEventListener("hashchange",()=>{
   if(skipHash){skipHash=false;lastHash=location.hash;return}
   const stay=ED&&location.hash.startsWith("#/mentor/edit/"+ED.id+"/");
-  if(ED&&ED._ch&&!stay){const target=location.hash;skipHash=true;location.hash=lastHash;uiConfirm("Есть несохранённые изменения урока. Уйти без сохранения?","Уйти").then(ok=>{if(ok){ED=null;location.hash=target}});return}
+  if(ED&&ED._ch&&!stay){const target=location.hash;skipHash=true;location.hash=lastHash;uiConfirm("Есть несохранённые изменения лекции. Уйти без сохранения?","Уйти").then(ok=>{if(ok){ED=null;location.hash=target}});return}
   else if(ED&&!stay)ED=null;
   if(!stay)FLASH="";lastHash=location.hash;render()});
 window.addEventListener("beforeunload",e=>{if(ED&&ED._ch){e.preventDefault();e.returnValue=""}});

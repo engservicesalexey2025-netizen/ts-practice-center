@@ -89,6 +89,10 @@ drop policy if exists "docs: trainee writes own" on public.docs;
 create policy "docs: trainee writes own" on public.docs for all
   using (path = 'trainees/' || auth.uid()::text)
   with check (path = 'trainees/' || auth.uid()::text);
+-- Наставник может удалить запись абитуриента из журнала (тестовые/лишние анкеты)
+drop policy if exists "docs: mentors delete trainees" on public.docs;
+create policy "docs: mentors delete trainees" on public.docs for delete
+  using (public.is_mentor() and path like 'trainees/%');
 
 -- Realtime (замена onSnapshot)
 alter publication supabase_realtime add table public.docs;

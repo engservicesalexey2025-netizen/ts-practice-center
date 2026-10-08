@@ -13,6 +13,15 @@ export const configured = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 export const supabase = configured ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
+// На случай повторной подписки на тот же путь (например, при двойном срабатывании
+// onAuthStateChange) — снимаем старый канал с тем же именем перед созданием нового,
+// иначе Supabase Realtime бросает "tried to subscribe multiple times".
+function openChannel(name) {
+  const old = supabase.getChannels().find(c => c.topic === "realtime:" + name);
+  if (old) supabase.removeChannel(old);
+  return supabase.channel(name);
+}
+
 export const blobUrl = id => id ? `${SUPABASE_URL}/storage/v1/object/public/assets/${id}` : "";
 
 function wrapError(e) {
@@ -50,8 +59,7 @@ function doc(path) {
       let stopped = false;
       const pull = () => self.get().then(s => { if (!stopped) next(s) }).catch(e => err && err(wrapError(e)));
       pull();
-      const channel = supabase
-        .channel("doc:" + path)
+      const channel = openChannel("doc:" + path)
         .on("postgres_changes", { event: "*", schema: "public", table: "docs", filter: `path=eq.${path}` }, pull)
         .subscribe();
       return () => { stopped = true; supabase.removeChannel(channel) };
@@ -76,8 +84,7 @@ function collection(path) {
       let stopped = false;
       const pull = () => self.get().then(s => { if (!stopped) next(s) }).catch(e => err && err(wrapError(e)));
       pull();
-      const channel = supabase
-        .channel("col:" + path)
+      const channel = openChannel("col:" + path)
         .on("postgres_changes", { event: "*", schema: "public", table: "docs", filter: `collection=eq.${path}` }, pull)
         .subscribe();
       return () => { stopped = true; supabase.removeChannel(channel) };
@@ -87,6 +94,19 @@ function collection(path) {
 }
 
 export const db = { doc, collection };
+
+export async function getProfileEmails(uids) {
+  if (!uids.length) return [];
+  const { data, error } = await supabase.from("profiles").select("id,email").in("id", uids);
+  if (error) throw wrapError(error);
+  return data || [];
+}
+
+export async function notifyAssignment({ uids, category, siteUrl }) {
+  const { data, error } = await supabase.functions.invoke("notify-assignment", { body: { uids, category, siteUrl } });
+  if (error) throw wrapError(error);
+  return data;
+}
 
 async function currentAuthUser() {
   const { data } = await supabase.auth.getUser();
