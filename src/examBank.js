@@ -60,7 +60,7 @@ export async function parseWorkbook(file) {
 export function pickRandom(bank, categories, n, rng) {
   const pool = categories.flatMap(cat => (bank[cat] || []).map(q => Object.assign({ cat }, q)));
   const shuffled = pool.map(q => [rng(), q]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
-  return shuffled.slice(0, n).map(q => {
+  return shuffled.slice(0, n == null ? shuffled.length : n).map(q => {
     const letters = ["A", "B", "C", "D"];
     const opts = letters.map(l => q[l.toLowerCase()]);
     const order = letters.map((l, i) => [rng(), l, opts[i]]).sort((a, b) => a[0] - b[0]);

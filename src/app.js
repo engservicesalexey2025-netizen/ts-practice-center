@@ -9,7 +9,7 @@
 import { N, BASE_SEC, BASE, nm } from "./data/lessons.js";
 import { esc, enc } from "./utils.js";
 import { uiConfirm, uiPrompt, uiAlert } from "./ui/dialogs.js";
-import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment } from "./platform.js";
+import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole } from "./platform.js";
 import { parseWorkbook, pickRandom } from "./examBank.js";
 
 const LOGO_FULL="/logo-full.jpg";
@@ -108,10 +108,10 @@ gg:l=>`https://www.google.com/search?tbm=isch&q=${enc(l.kw+" узел схема
 };
 
 /* ================= ПЛАТФОРМА: общая база, роли ================= */
-const P={db:null,user:null,assets:null,dl:null,uid:null,canEdit:false,ready:false,authed:false,dataReady:false,writeFail:false};
-let CFG={seq:true},OVR={},CSEC={},ACC=null,EXAMBANK={};
+const P={db:null,user:null,assets:null,dl:null,uid:null,canEdit:false,role:null,ready:false,authed:false,dataReady:false,writeFail:false};
+let CFG={seq:true},OVR={},CSEC={},ACC=null,EXAMBANK={},EXR=null;
 const KEY="tnSchool.v2";
-const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{}});
+const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},examUnlockUsed:null});
 let st=blank();
 try{const r=localStorage.getItem(KEY);if(r)st=Object.assign(blank(),JSON.parse(r))}catch(e){}
 let saveT=null,saving=false,saveAgain=false;
@@ -158,13 +158,13 @@ function initPlatform(){
   onAuthChange(async session=>{
     if(!session){
       authUidInFlight=null;
-      P.ready=true;P.authed=false;P.dataReady=false;P.db=null;P.user=null;P.uid=null;P.canEdit=false;P.assets=null;P.dl=null;
+      P.ready=true;P.authed=false;P.dataReady=false;P.db=null;P.user=null;P.uid=null;P.canEdit=false;P.role=null;P.assets=null;P.dl=null;
       render();return;
     }
     if(authUidInFlight===session.user.id)return;
     authUidInFlight=session.user.id;
     P.db=platformDb;P.user=platformUser;P.uid=session.user.id;P.assets=platformAssets;P.dl=platformDownloads;
-    P.canEdit=await platformUser.canEdit();
+    P.canEdit=await platformUser.canEdit();P.role=await platformUser.role();
     P.authed=true;P.ready=true;
     try{const s=await P.db.doc("trainees/"+P.uid).get();if(s.exists){st=Object.assign(blank(),clone(s.data()));try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}}else if(st.prof)save()}catch(e){}
     firstSnaps=0;
@@ -174,11 +174,13 @@ function initPlatform(){
     P.db.doc("cms/main/access/"+P.uid).onSnapshot(s=>{ACC=s.exists?clone(s.data()):null;rebuild();if(firstSnaps>=3)softRender()},()=>{});
     P.db.collection("cms/main/sections").onSnapshot(s=>{CSEC={};s.docs.forEach(d=>{CSEC[d.id]=clone(d.data())});rebuild();fin()},()=>fin());
     P.db.doc("cms/main/examBank").onSnapshot(s=>{EXAMBANK=s.exists?clone(s.data()):{};if(firstSnaps>=3)softRender()},()=>{});
+    P.db.doc("cms/main/examRetake/"+P.uid).onSnapshot(s=>{EXR=s.exists?clone(s.data()):null;if(firstSnaps>=3)softRender()},()=>{});
     render();
   });
 }
 
 const isMentor=()=>!!P.canEdit;
+const isOwner=()=>P.role==="owner";
 function locked(l){if(!CFG.seq||isMentor())return false;const sl=LS.filter(x=>x.s===l.s);const i=sl.indexOf(l);return i>0&&!isDone(sl[i-1].id)}
 
 /* ================= UI ================= */
@@ -253,15 +255,31 @@ function desPage(){
 
 /* ---------- аттестация ---------- */
 let EX=null;
+function examRetakeLocked(){
+  if(!st.ex.length)return false;
+  const d=EXR&&EXR.date;
+  if(!d)return true;
+  const today=new Date().toISOString().slice(0,10);
+  if(d>today)return true;
+  if(st.examUnlockUsed===d)return true;
+  return false;
+}
+function examRetakeMsg(){
+  const d=EXR&&EXR.date;
+  if(!d)return "Результат аттестации зафиксирован. Повторное прохождение станет доступно, когда наставник назначит дату пересдачи.";
+  const today=new Date().toISOString().slice(0,10);
+  if(d>today)return `Повторное прохождение аттестации назначено на ${fdd(d)}.`;
+  return "Эта дата пересдачи уже использована. Обратитесь к наставнику за новой датой.";
+}
 function examPage(){
   if(EX&&EX.stage==="run")return examRun();
   if(EX&&EX.stage==="done")return examResult();
   const cats=Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru"));
+  const locked=examRetakeLocked();
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Аттестация ТН</h1>
-  <p class="mut">Случайные вопросы из выбранных разделов нормативной базы, которые загрузил наставник. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
-  ${!cats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:`
+  <p class="mut">Все вопросы из выбранных разделов нормативной базы, которые загрузил наставник, в случайном порядке. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
+  ${!cats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:locked?`<div class="note">${examRetakeMsg()}</div>`:`
   <div class="blk"><p>Аттестуемый: <b>${esc(st.prof.fio)}</b> · ${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}</p>
-  <div class="row" style="margin-bottom:12px"><select class="inp" id="exn"><option value="20">20 вопросов</option><option value="30">30 вопросов</option><option value="50">50 вопросов</option></select></div>
   <div class="chk">${cats.map(cat=>`<label><input type="checkbox" class="exs" value="${esc(cat)}" checked><span>${esc(cat)} <span class="mut sm">(${EXAMBANK[cat].length} вопросов)</span></span></label>`).join("")}</div>
   <div class="row" style="margin-top:14px"><button class="btn pri" id="exgo">Начать аттестацию</button></div></div>`}
   ${st.ex.length?`<div class="blk"><h2 style="font-size:17px">Мои аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${st.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}`;
@@ -326,10 +344,12 @@ function trainerLoad(){
 }
 
 function examStart(){
+  if(examRetakeLocked())return;
   const secs=[...document.querySelectorAll(".exs:checked")].map(x=>x.value);if(!secs.length){uiAlert("Выберите хотя бы один раздел.");return}
-  const n=+document.getElementById("exn").value,r=rng("ex"+Date.now());
-  const qs=pickRandom(EXAMBANK,secs,n,r);
+  const r=rng("ex"+Date.now());
+  const qs=pickRandom(EXAMBANK,secs,null,r);
   if(!qs.length){uiAlert("В выбранных разделах нет вопросов.");return}
+  if(st.ex.length&&EXR&&EXR.date){st.examUnlockUsed=EXR.date;save()}
   EX={stage:"run",qs,secs,start:now(),end:Date.now()+qs.length*90000};dirty=true;render();
 }
 
@@ -787,8 +807,24 @@ function mentorSettings(){
   <div class="blk"><h2 style="font-size:17px">Доступ новых абитуриентов</h2>
   <label class="row"><input type="radio" name="accdef" value="all" ${CFG.accDef!=="none"?"checked":""}> Открывать все разделы сразу после регистрации</label>
   <label class="row" style="margin-top:6px"><input type="radio" name="accdef" value="none" ${CFG.accDef==="none"?"checked":""}> Закрывать все разделы — наставник открывает их в журнале («Доступ к разделам»)</label></div>
+  <div class="blk"><h2 style="font-size:17px">Логотип в шапке сайта</h2>
+  <p class="mut sm">Показывается рядом с названием в шапке и в подвале сайта.</p>
+  <div class="row" style="align-items:center;gap:14px"><img src="${CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg"}" alt="Логотип" style="width:48px;height:48px;object-fit:contain;border-radius:4px;background:#fff">
+  <label class="btn">Загрузить логотип<input type="file" accept="image/*" hidden id="hlogo"></label>${CFG.logo?`<button class="btn" id="hlogodefault">Вернуть логотип по умолчанию</button>`:""}<span class="sm" id="hlogomsg"></span></div></div>
   <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Название в шапке сайта (рядом с логотипом)<input class="inp" id="hsite" value="${esc(CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»")}"></label><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Школа ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
-  <p class="mut sm">Доступ в кабинет наставника определяется ролью учётной записи (<code>profiles.role</code> в базе данных) — отдельный пароль не нужен.</p>`;
+  <p class="mut sm">Доступ в кабинет наставника определяется ролью учётной записи (<code>profiles.role</code> в базе данных) — отдельный пароль не нужен.</p>
+  ${isOwner()?teamSection():""}`;
+}
+let TEAM=null;
+const roleLabel=r=>({owner:"Владелец",mentor:"Наставник",trainee:"Абитуриент"}[r]||r);
+async function loadTeam(){try{TEAM=await listProfiles()}catch(e){TEAM=[]}if(location.hash.startsWith("#/mentor/settings"))render()}
+function teamSection(){
+  if(!TEAM){loadTeam();return `<div class="blk"><h2 style="font-size:17px">Доступ наставников</h2><p>Загрузка…</p></div>`}
+  return `<div class="blk"><h2 style="font-size:17px">Доступ наставников</h2>
+  <p class="mut sm">Назначьте роль «Наставник» другим специалистам — они получат полный доступ к редактированию материалов, журналу и назначению курсов.</p>
+  <div class="tbl-wrap"><table class="nt"><tr><th>E-mail</th><th>Роль</th><th></th></tr>
+  ${TEAM.map(p=>`<tr><td>${esc(p.email||p.id)}</td><td><span class="pill ${p.role!=="trainee"?"ok":""}">${esc(roleLabel(p.role))}</span></td><td>${p.id===P.uid?`<span class="mut sm">это вы</span>`:p.role==="owner"?"":`<button class="btn sm" data-rolebtn="${esc(p.id)}" data-role="${p.role==="mentor"?"trainee":"mentor"}">${p.role==="mentor"?"Снять права наставника":"Сделать наставником"}</button>`}</td></tr>`).join("")}
+  </table></div><p class="sm" id="teammsg"></p></div>`;
 }
 
 /* ================= БАНК ВОПРОСОВ АТТЕСТАЦИИ (загрузка из Excel) ================= */
@@ -1034,8 +1070,18 @@ async function edSave(){
 /* ----- журнал абитуриентов ----- */
 async function loadJournal(){
   JR={loading:true,rows:[]};
-  try{const s=await P.db.collection("trainees").limit(1000).get();JR={rows:s.docs.map(d=>Object.assign({uid:d.id},clone(d.data()))).filter(r=>r.prof),acc:{}};try{const a=await P.db.collection("cms/main/access").limit(1000).get();a.docs.forEach(d=>{JR.acc[d.id]=clone(d.data())})}catch(e){}}catch(e){JR={rows:[],acc:{},err:true}}
+  try{
+    const s=await P.db.collection("trainees").limit(1000).get();
+    JR={rows:s.docs.map(d=>Object.assign({uid:d.id},clone(d.data()))).filter(r=>r.prof),acc:{},retake:{}};
+    try{const a=await P.db.collection("cms/main/access").limit(1000).get();a.docs.forEach(d=>{JR.acc[d.id]=clone(d.data())})}catch(e){}
+    try{const rt=await P.db.collection("cms/main/examRetake").limit(1000).get();rt.docs.forEach(d=>{JR.retake[d.id]=clone(d.data())})}catch(e){}
+  }catch(e){JR={rows:[],acc:{},retake:{},err:true}}
   if(location.hash.startsWith("#/mentor/journal")||location.hash.startsWith("#/mentor/t/"))render();
+}
+const retakeOf=uid=>(JR&&JR.retake&&JR.retake[uid]&&JR.retake[uid].date)||"";
+async function setRetakeDate(uid,date,msgEl){
+  try{await P.db.doc("cms/main/examRetake/"+uid).set({date:date||null,upd:now(),by:P.uid||""});JR.retake[uid]={date:date||null};if(msgEl)msgEl.textContent=date?"Дата пересдачи назначена: "+fdd(date):"Дата пересдачи снята.";return true}
+  catch(e){if(msgEl)msgEl.textContent="Не сохранено: нет прав на запись.";return false}
 }
 function tStats(r){const ids=LS.map(l=>l.id),lp2=r.lp||{};const done=ids.filter(id=>lp2[id]&&lp2[id].p).length;const qs=ids.map(id=>lp2[id]&&lp2[id].q).filter(x=>x!=null);const last=[r.upd,...Object.values(lp2).flatMap(x=>[x.o,x.qd,x.p,x.f&&x.f[2]])].filter(Boolean).sort().pop();const ex=(r.ex||[]).slice(-1)[0];const ms=SEC.filter(s=>{const ls=LS.filter(l=>l.s===s[0]);return ls.length&&ls.every(l=>lp2[l.id]&&lp2[l.id].p)}).length;return{ms,done,avg:qs.length?Math.round(qs.reduce((a,b)=>a+b,0)/qs.length):null,last,ex,fp:r.tr&&r.tr.tot?pct(r.tr.hit,r.tr.tot):null}}
 function accOf(uid){const a=JR&&JR.acc&&JR.acc[uid];if(a&&Array.isArray(a.secs))return a.secs;return CFG.accDef==="none"?[]:SEC.map(s=>s[0])}
@@ -1089,7 +1135,10 @@ function traineePage(uid){
   <div class="blk no-print"><h2 style="font-size:16px;margin-bottom:8px">Доступ к разделам</h2><p class="mut sm">Отмеченные разделы абитуриент видит на экране и может проходить.</p>
   <div class="chk">${SEC.map(sc=>`<label><input type="checkbox" class="accb" data-u="${esc(uid)}" data-s="${sc[0]}" ${accOf(uid).includes(sc[0])?"checked":""}><span>${sc[0]}. ${esc(sc[1])}</span></label>`).join("")}</div>
   <div class="row" style="margin-top:8px"><button class="btn sm" data-accall="${esc(uid)}">Открыть все</button><button class="btn sm" data-accnone="${esc(uid)}">Закрыть все</button><span class="sm" id="accmsg"></span></div></div>
-  ${(r.ex||[]).length?`<div class="blk"><h2 style="font-size:16px">Аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
+  ${(r.ex||[]).length?`<div class="blk"><h2 style="font-size:16px">Аттестации</h2>
+  <p class="mut sm">После каждой аттестации повторное прохождение заблокировано, пока вы не назначите дату пересдачи.</p>
+  <div class="row no-print"><label>Дата пересдачи<input type="date" class="inp" id="retakedate" value="${esc(retakeOf(uid))}"></label><button class="btn pri" id="retakesave" data-u="${esc(uid)}">Назначить</button><span class="sm" id="retakemsg">${retakeOf(uid)?"Назначено: "+fdd(retakeOf(uid)):"Не назначено — повторный допуск закрыт"}</span></div>
+  <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
   ${SEC.map(sc=>`<div class="blk"><h2 style="font-size:16px">${sc[0]}. ${esc(sc[1])}${LS.filter(l=>l.s===sc[0]).every(l=>lp2[l.id]&&lp2[l.id].p)?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Шаги</th><th>Найди дефект</th><th>DES</th><th>Тест (попыток)</th><th>Освоен</th></tr>${LS.filter(l=>l.s===sc[0]).map(l=>{const x=lp2[l.id]||{};return `<tr><td>${l.id}. ${esc(l.t)}</td><td>${fd(x.o)}</td><td>${lessonSteps(l).filter(s=>x.v&&x.v[s]).length}/${lessonSteps(l).length}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}${x.seen&&!x.fall?" · смотрел ответы":""}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?`ошибки (${x.da})`:"—"}</td><td>${x.q!=null?`${x.q}% (${x.qa||1})`:"—"}</td><td>${x.p?fd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
 }
 async function journalCsv(btn){
@@ -1106,6 +1155,7 @@ function render(){
   if(!P.authed){if(top)top.classList.add("hidden");if(foot)foot.classList.add("hidden");app.innerHTML="";mountLoginScreen(app);return}
   if(top)top.classList.remove("hidden");if(foot)foot.classList.remove("hidden");if(signout)signout.classList.remove("hidden");
   const sn=document.getElementById("sitename");if(sn)sn.textContent=CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»";
+  const li=document.getElementById("logo-img");if(li)li.src=CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg";
   rebuild();
   const h=(location.hash||"#/").replace(/^#\/?/,"");const [p,a,b,c]=h.split("/");
   document.getElementById("upd").classList.add("hidden");
@@ -1146,11 +1196,25 @@ function bindPage(p,a,b,c){
       document.getElementById("needall").onchange=async e=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{needAll:e.target.checked}));FLASH="Настройка сохранена."}catch(er){uiAlert("Нет прав на запись.")}};
       document.getElementById("hsave").onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{siteName:document.getElementById("hsite").value.trim(),heroTitle:document.getElementById("htitle").value.trim(),heroText:document.getElementById("htext").value.trim()}));FLASH="Тексты главной сохранены."}catch(er){uiAlert("Нет прав на запись.")}};
       document.getElementById("seq").onchange=async e=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{seq:e.target.checked}));FLASH="Настройка сохранена."}catch(er){uiAlert("Нет прав на запись.")}};
+      const hl=document.getElementById("hlogo");if(hl)hl.onchange=async()=>{
+        const f=hl.files[0];if(!f)return;const m=document.getElementById("hlogomsg");m.textContent="Загружаю логотип…";
+        const s=await shrink(f,400);if(!s){m.textContent="Не удалось прочитать файл — выберите JPG или PNG.";return}
+        try{const r=await P.assets.upload(dataUrlToBlob(s.url));await P.db.doc("cms/main").set(Object.assign({},CFG,{logo:r.id}));m.textContent="Логотип сохранён."}
+        catch(e){m.textContent="Не сохранено: нет прав на запись."}
+        hl.value="";
+      };
+      const hld=document.getElementById("hlogodefault");if(hld)hld.onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{logo:null}))}catch(e){uiAlert("Нет прав на запись.")}};
+      app.querySelectorAll("[data-rolebtn]").forEach(b=>b.onclick=async()=>{
+        const uid=b.dataset.rolebtn,role=b.dataset.role,p=TEAM.find(x=>x.id===uid),m=document.getElementById("teammsg");
+        if(!await uiConfirm(`${role==="mentor"?"Назначить":"Снять"} права наставника для ${p?esc(p.email||p.id):uid}?`))return;
+        try{await setProfileRole(uid,role);p.role=role;render()}catch(e){if(m)m.textContent="Не удалось изменить роль: нет прав."}
+      });
     }
     const accSave=async(uid,msg)=>{const secs=[...app.querySelectorAll(`.accb[data-u="${CSS.escape(uid)}"]`)].filter(x=>x.checked).map(x=>x.dataset.s);await accSet(uid,secs,msg)};
     app.querySelectorAll(".accb").forEach(cb=>cb.onchange=()=>accSave(cb.dataset.u,document.getElementById("accmsg")));
     app.querySelectorAll("[data-accall],[data-accnone]").forEach(bt=>bt.onclick=()=>{const uid=bt.dataset.accall||bt.dataset.accnone,on=!!bt.dataset.accall;app.querySelectorAll(`.accb[data-u="${CSS.escape(uid)}"]`).forEach(x=>x.checked=on);accSave(uid,document.getElementById("accmsg"))});
     app.querySelectorAll("[data-jv]").forEach(bt=>bt.onclick=()=>{JR.view=bt.dataset.jv;render()});
+    const rts=document.getElementById("retakesave");if(rts)rts.onclick=async()=>{const uid=rts.dataset.u,val=document.getElementById("retakedate").value;await setRetakeDate(uid,val||null,document.getElementById("retakemsg"))};
     app.querySelectorAll('input[name="accdef"]').forEach(r=>r.onchange=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{accDef:r.value}));FLASH="Настройка доступа сохранена."}catch(e){uiAlert("Нет прав на запись.")}});
     if(a==="journal"&&JR&&!JR.loading){const jq=document.getElementById("jq");jq.oninput=()=>{JR.q=jq.value;const pos=jq.selectionStart;render();const n=document.getElementById("jq");n.focus();n.setSelectionRange(pos,pos)};document.getElementById("jre").onclick=()=>{JR=null;render()};const c=document.getElementById("jcsv");if(c)c.onclick=()=>journalCsv(c)
       const ag=document.getElementById("asggo");if(ag)ag.onclick=async()=>{

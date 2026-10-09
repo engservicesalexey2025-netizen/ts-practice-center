@@ -120,8 +120,25 @@ export const user = {
     if (!u) return false;
     const { data } = await supabase.from("profiles").select("role").eq("id", u.id).maybeSingle();
     return !!data && (data.role === "owner" || data.role === "mentor");
+  },
+  role: async () => {
+    const u = await currentAuthUser();
+    if (!u) return null;
+    const { data } = await supabase.from("profiles").select("role").eq("id", u.id).maybeSingle();
+    return data ? data.role : null;
   }
 };
+
+export async function listProfiles() {
+  const { data, error } = await supabase.from("profiles").select("id,email,role").order("email");
+  if (error) throw wrapError(error);
+  return data || [];
+}
+
+export async function setProfileRole(uid, role) {
+  const { error } = await supabase.from("profiles").update({ role }).eq("id", uid);
+  if (error) throw wrapError(error);
+}
 
 function randomId() {
   return crypto.randomUUID().replace(/-/g, "");
