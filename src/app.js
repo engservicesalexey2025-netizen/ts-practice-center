@@ -1184,8 +1184,8 @@ function traineePage(uid){
 }
 async function journalCsv(btn){
   const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
-  const head=["ФИО","Специальность","Уровень","Объект","Лекции с","Освоено лекций","Всего лекций","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Результат аттестации","Дата аттестации","Открытые разделы",...LS.map(l=>"Пройден "+l.id)];
-  const body=JR.rows.map(r=>{const s=tStats(r),lp2=r.lp||{};return[r.prof.fio,r.prof.spec,r.prof.lvl,r.prof.obj,fdd(r.prof.reg),s.done,LS.length,s.avg,s.fp,fd(s.last),s.ex?s.ex.pc:"",s.ex?(s.ex.pc>=passPct()?"Зачёт":"Незачёт"):"",s.ex?fdd(s.ex.date):"",accOf(r.uid).join(" "),...LS.map(l=>lp2[l.id]&&lp2[l.id].p?fdd(lp2[l.id].p):"")].map(q).join(";")});
+  const head=["ФИО","Специальность","Уровень","Объект","Лекции с","Освоено лекций","Всего лекций","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Результат аттестации","Дата аттестации","Открытые разделы",...LS.map(l=>`Пройден ${l.id}. ${l.t}`)];
+  const body=JR.rows.map(r=>{const s=tStats(r),lp2=r.lp||{};return[r.prof.fio,r.prof.spec,r.prof.lvl,r.prof.obj,fdd(r.prof.reg),s.done,LS.length,s.avg,s.fp,fd(s.last),s.ex?s.ex.pc:"",s.ex?(s.ex.pc>=passPct()?"Зачёт":"Незачёт"):"",s.ex?fdd(s.ex.date):"",accOf(r.uid).map(secName).join(", "),...LS.map(l=>lp2[l.id]&&lp2[l.id].p?fdd(lp2[l.id].p):"")].map(q).join(";")});
   try{await P.dl.save({filename:"zhurnal-praktika-tn-"+new Date().toISOString().slice(0,10)+".csv",data:"\ufeff"+[head.map(q).join(";"),...body].join("\r\n")})}catch(e){if(e&&e.code!=="cancelled")uiAlert("Скачивание недоступно в этом окне.")}
 }
 
