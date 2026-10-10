@@ -111,6 +111,28 @@ gg:l=>`https://www.google.com/search?tbm=isch&q=${enc(l.kw+" узел схема
 const P={db:null,user:null,assets:null,dl:null,uid:null,canEdit:false,role:null,ready:false,authed:false,dataReady:false,writeFail:false};
 let CFG={seq:true},OVR={},CSEC={},ACC=null,EXAMBANK={},EXR=null;
 const KEY="tnSchool.v2";
+
+/* ---------- специальности, уровни, матрица допуска к аттестации -----------
+   Значения по умолчанию взяты из "Матрица_тестирования_инженеров.xlsx":
+   строки — должности (= "Специальность" в анкете), столбцы — разделы банка
+   вопросов аттестации (должны совпадать с названиями листов Excel при
+   загрузке банка в "Кабинет наставника → Банк вопросов аттестации"). */
+const DEFAULT_LEVELS=["Абитуриент (стажёр)","Технический надзор","Ведущий ТН","Главный специалист ТН"];
+const DEFAULT_SPECS=["Инженер ТН по Общестрою","Инженер ТН по ОВиВК","Инженер ТН по ЭСиСС","Инженер ТН по Лифтам","Инженер ТН по Гидроизоляции","Инженер ТН по Фасаду и СПОК","Инженер-геодезист","Инженер-универсал Инж.сети"];
+const DEFAULT_SPEC_MATRIX={
+"Инженер ТН по Общестрою":["Общестроительные работы","Благоустройство","Гидроизоляция","Фасады и СПОК"],
+"Инженер ТН по ОВиВК":["ОВиВК"],
+"Инженер ТН по ЭСиСС":["ЭСиСС","Технологическое оборудование/Лифты"],
+"Инженер ТН по Лифтам":["Технологическое оборудование/Лифты"],
+"Инженер ТН по Гидроизоляции":["Общестроительные работы","Гидроизоляция"],
+"Инженер ТН по Фасаду и СПОК":["Фасады и СПОК"],
+"Инженер-геодезист":["Геодезия"],
+"Инженер-универсал Инж.сети":["ОВиВК","ЭСиСС","Технологическое оборудование/Лифты"]
+};
+const specsList=()=>(CFG.specialties&&CFG.specialties.length?CFG.specialties:DEFAULT_SPECS);
+const levelsList=()=>(CFG.levels&&CFG.levels.length?CFG.levels:DEFAULT_LEVELS);
+const specMatrix=()=>(CFG.specMatrix&&Object.keys(CFG.specMatrix).length?CFG.specMatrix:DEFAULT_SPEC_MATRIX);
+const allowedCats=spec=>{const m=specMatrix();return Object.prototype.hasOwnProperty.call(m,spec)?m[spec]:null};
 const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},examUnlockUsed:null});
 let st=blank();
 try{const r=localStorage.getItem(KEY);if(r)st=Object.assign(blank(),JSON.parse(r))}catch(e){}
@@ -194,17 +216,16 @@ const pct=(a,b)=>b?Math.round(a/b*100):0;
 function registerPage(){
   const p=st.prof||{};
   return `<div class="blk" style="max-width:640px;margin:20px auto">
-  <h1 style="font-size:clamp(22px,4vw,30px);margin-bottom:6px">Добро пожаловать в Школу ТН ЖК</h1>
+  <h1 style="font-size:clamp(22px,4vw,30px);margin-bottom:6px">Добро пожаловать в Практику ТН ЖК</h1>
   <p class="mut">Укажите свои данные. Они фиксируются в журнале обучения вместе с датами прохождения лекций, тестов и аттестаций.</p>
   <div class="form">
    <label>ФИО<input class="inp" id="rf" value="${esc(p.fio||"")}" placeholder="Иванов Иван Иванович" autocomplete="name"></label>
-   <label>Специальность<input class="inp" id="rs" list="specs" value="${esc(p.spec||"")}" placeholder="Выберите или впишите"></label>
-   <datalist id="specs"><option>ТН — общестроительные работы</option><option>ТН — монолитные и каменные работы</option><option>ТН — кровля и фасады</option><option>ТН — инженерные сети (ОВиК, ВК)</option><option>ТН — электромонтажные работы и СС</option><option>Инженер СК заказчика</option><option>Инженер ПТО</option></datalist>
-   <label>Уровень ТН<select class="inp" id="rl">${["Абитуриент (стажёр)","Технический надзор","Ведущий ТН","Главный специалист ТН"].map(x=>`<option ${p.lvl===x?"selected":""}>${x}</option>`).join("")}</select></label>
+   <label>Специальность<select class="inp" id="rs">${(p.spec&&!specsList().includes(p.spec)?[p.spec,...specsList()]:specsList()).map(x=>`<option ${p.spec===x?"selected":""}>${esc(x)}</option>`).join("")}</select></label>
+   <label>Уровень ТН<select class="inp" id="rl">${(p.lvl&&!levelsList().includes(p.lvl)?[p.lvl,...levelsList()]:levelsList()).map(x=>`<option ${p.lvl===x?"selected":""}>${esc(x)}</option>`).join("")}</select></label>
    <label>Объект / подразделение (необязательно)<input class="inp" id="ro" value="${esc(p.obj||"")}"></label>
   </div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" id="rgo">${st.prof?"Сохранить данные":"Начать обучение"}</button>${st.prof?`<a class="btn" href="#/progress">Отмена</a>`:""}</div>
-  <p class="mut sm" style="margin-top:14px">Ваши результаты сохраняются в общей базе школы и видны наставнику.</p></div>`;
+  <div class="row" style="margin-top:16px"><button class="btn pri" id="rgo">${st.prof?"Сохранить данные":"Начать обучение"}</button>${st.prof?`<a class="btn" href="#/progress">Отмена</a><button class="btn" id="pwchange2">Сменить пароль</button>`:""}</div>
+  <p class="mut sm" style="margin-top:14px">Ваши результаты сохраняются в общей базе практики и видны наставнику.</p></div>`;
 }
 
 function secPage(k){
@@ -274,11 +295,13 @@ function examRetakeMsg(){
 function examPage(){
   if(EX&&EX.stage==="run")return examRun();
   if(EX&&EX.stage==="done")return examResult();
-  const cats=Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru"));
+  const allCats=Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru"));
+  const allow=allowedCats(st.prof.spec);
+  const cats=allow?allCats.filter(c=>allow.includes(c)):allCats;
   const locked=examRetakeLocked();
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Аттестация ТН</h1>
   <p class="mut">Все вопросы из выбранных разделов нормативной базы, которые загрузил наставник, в случайном порядке. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
-  ${!cats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:locked?`<div class="note">${examRetakeMsg()}</div>`:`
+  ${!allCats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:!cats.length?`<div class="note">Для вашей специальности («${esc(st.prof.spec||"")}») в банке аттестации пока нет доступных разделов. Обратитесь к наставнику.</div>`:locked?`<div class="note">${examRetakeMsg()}</div>`:`
   <div class="blk"><p>Аттестуемый: <b>${esc(st.prof.fio)}</b> · ${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}</p>
   <div class="chk">${cats.map(cat=>`<label><input type="checkbox" class="exs" value="${esc(cat)}" checked><span>${esc(cat)} <span class="mut sm">(${EXAMBANK[cat].length} вопросов)</span></span></label>`).join("")}</div>
   <div class="row" style="margin-top:14px"><button class="btn pri" id="exgo">Начать аттестацию</button></div></div>`}
@@ -391,6 +414,8 @@ function modal(title,fields,onSave,opt={}){
   const first=d.querySelector("[data-mi]");if(first)first.focus();
 }
 const chkUrl=u=>{if(!/^https?:\/\//.test(u.trim()))throw"Ссылка должна начинаться с http:// или https://"};
+function openPasswordModal(){modal("Смена пароля",[{label:"Новый пароль (не короче 6 символов)",type:"password"},{label:"Повторите новый пароль",type:"password"}],
+  async v=>{if(v[0].length<6){uiAlert("Пароль должен быть не короче 6 символов.");return false}if(v[0]!==v[1]){uiAlert("Пароли не совпадают.");return false}await updatePassword(v[0]);uiAlert("Пароль изменён.")})}
 function editStepHead(l,k){const look=k==="look";modal(`Шаг «${stTitle(l,k)}»`,[{label:"Название шага",value:stTitle(l,k)},{label:"Вступительный текст шага (что будет в этом шаге). Строки с «- » — список",type:"area",value:(l.sti&&l.sti[k])||"",rows:6},...(look?[{label:"Подпись под схемой / фото",value:l.cap||""}]:[])],
   async v=>{await quickSave(l,doc=>{doc.stt=Object.assign({},doc.stt||{},{[k]:v[0].trim()||STEP_T[k]});doc.sti=Object.assign({},doc.sti||{},{[k]:v[1]});if(look)doc.cap=v[2]})})}
 function editLink(l,kind,i){const list=(kind==="v"?effVids:effLnk)(l).map(x=>x.slice());const isNew=i<0;const cur=isNew?["",""]:list[i];
@@ -786,8 +811,8 @@ const SCN={form:"Опалубка стен",slab:"Опалубка перекр�
 let ED=null,JR=null,FLASH="";
 
 function mentorGate(){
-  if(!P.dataReady)return `<div class="blk"><p>Подключение к базе школы…</p></div>`;
-  return `<div class="blk"><h1 style="font-size:24px">Режим наставника</h1><p>У вашей учётной записи нет роли «Наставник» в этой школе. Попросите владельца назначить роль в базе данных (таблица profiles).</p></div>`;
+  if(!P.dataReady)return `<div class="blk"><p>Подключение к базе практики…</p></div>`;
+  return `<div class="blk"><h1 style="font-size:24px">Режим наставника</h1><p>У вашей учётной записи нет роли «Наставник» в этой практике. Попросите владельца назначить роль в базе данных (таблица profiles).</p></div>`;
 }
 function mNav(cur){const f=FLASH;return `${f?`<div class="res" style="background:rgba(46,125,79,.18)">${esc(f)}</div>`:""}<div class="mtabs no-print"><a href="#/mentor" class="${cur==="d"?"on":""}">Лекции и разделы</a><a href="#/mentor/journal" class="${cur==="j"?"on":""}">Журнал абитуриентов</a><a href="#/mentor/exam" class="${cur==="e"?"on":""}">Банк аттестации</a><a href="#/mentor/settings" class="${cur==="s"?"on":""}">Настройки</a><button class="btn" id="mout">Выйти из аккаунта</button></div>`}
 
@@ -801,7 +826,7 @@ function mentorDash(){
 }
 
 function mentorSettings(){
-  return `<h1 style="font-size:clamp(24px,4vw,34px)">Настройки школы</h1>${mNav("s")}
+  return `<h1 style="font-size:clamp(24px,4vw,34px)">Настройки практики</h1>${mNav("s")}
   <div class="blk"><h2 style="font-size:17px">Порядок прохождения</h2><label class="row"><input type="checkbox" id="seq" ${CFG.seq?"checked":""}> Открывать лекции раздела по порядку: следующий — после зачёта предыдущего</label>
   <label class="row" style="margin-top:8px"><input type="checkbox" id="needall" ${CFG.needAll!==false?"checked":""}> Для зачёта лекции нужно найти все дефекты в задании «Найди дефект» и сдать блиц-тест на 80 %</label></div>
   <div class="blk"><h2 style="font-size:17px">Доступ новых абитуриентов</h2>
@@ -811,7 +836,18 @@ function mentorSettings(){
   <p class="mut sm">Показывается рядом с названием в шапке и в подвале сайта.</p>
   <div class="row" style="align-items:center;gap:14px"><img src="${CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg"}" alt="Логотип" style="width:48px;height:48px;object-fit:contain;border-radius:4px;background:#fff">
   <label class="btn">Загрузить логотип<input type="file" accept="image/*" hidden id="hlogo"></label>${CFG.logo?`<button class="btn" id="hlogodefault">Вернуть логотип по умолчанию</button>`:""}<span class="sm" id="hlogomsg"></span></div></div>
-  <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Название в шапке сайта (рядом с логотипом)<input class="inp" id="hsite" value="${esc(CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»")}"></label><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Школа ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
+  <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Название в шапке сайта (рядом с логотипом)<input class="inp" id="hsite" value="${esc(CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»")}"></label><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Практика ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
+  <div class="blk"><h2 style="font-size:17px">Специальности и уровни ТН</h2>
+  <p class="mut sm">По одному значению на строке. Эти списки показываются в анкете абитуриента (поля «Специальность» и «Уровень ТН»).</p>
+  <div class="form"><label>Специальности<textarea class="inp" rows="8" id="specsta">${esc(specsList().join("\n"))}</textarea></label>
+  <label>Уровни ТН<textarea class="inp" rows="4" id="levelsta">${esc(levelsList().join("\n"))}</textarea></label></div>
+  <button class="btn pri" id="specsave" style="margin-top:10px">Сохранить списки</button></div>
+  <div class="blk"><h2 style="font-size:17px">Матрица допуска к аттестации</h2>
+  <p class="mut sm">Отметьте, какие разделы банка аттестации может проходить каждая специальность. Абитуриенту без отмеченных разделов аттестация будет недоступна, пока наставник не загрузит вопросы и не отметит разделы здесь.</p>
+  ${!Object.keys(EXAMBANK).length?`<p class="note">Сначала загрузите банк вопросов аттестации — разделы появятся здесь автоматически по названиям листов Excel.</p>`:`
+  <div class="tbl-wrap"><table class="nt acc"><tr><th>Специальность</th>${Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru")).map(c=>`<th style="text-align:center;white-space:nowrap">${esc(c)}</th>`).join("")}</tr>
+  ${specsList().map(s=>`<tr><td>${esc(s)}</td>${Object.keys(EXAMBANK).sort((a,b)=>a.localeCompare(b,"ru")).map(c=>`<td style="text-align:center"><input type="checkbox" class="smx" data-s="${esc(s)}" data-c="${esc(c)}" ${(allowedCats(s)||[]).includes(c)?"checked":""}></td>`).join("")}</tr>`).join("")}
+  </table></div><div class="row" style="margin-top:10px"><span class="sm" id="smxmsg"></span></div>`}</div>
   <p class="mut sm">Доступ в кабинет наставника определяется ролью учётной записи (<code>profiles.role</code> в базе данных) — отдельный пароль не нужен.</p>
   ${isOwner()?teamSection():""}`;
 }
@@ -1102,7 +1138,7 @@ function journalPage(){
   <div class="blk no-print"><h2 style="font-size:16px">Назначить курс</h2><p class="mut sm">Отметьте абитуриентов в таблице ниже, выберите раздел и нажмите «Назначить» — им откроется доступ к разделу, и (если настроена отправка писем) придёт e-mail со ссылкой на сайт.</p>
   <div class="row"><select class="inp" id="asgsec">${SEC.map(s=>`<option value="${s[0]}">${esc(s[1])}</option>`).join("")}</select><button class="btn pri" id="asggo">Назначить выбранным</button><span class="sm" id="asgmsg"></span></div></div>
   <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th></th><th>ФИО</th><th>Специальность</th><th>Уровень</th><th>Лекции с</th><th>Лекций освоено</th><th>Разделов закрыто</th><th>Ср. тест</th><th>Дефекты</th><th>Посл. активность</th><th>Аттестация</th><th>Открыто разделов</th><th></th></tr>
-  ${rows.map(r=>{const s=tStats(r);return `<tr><td><input type="checkbox" class="trsel" value="${esc(r.uid)}"></td><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=80?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td><td><button class="btn sm" data-deltr="${esc(r.uid)}" title="Удалить абитуриента">✕</button></td></tr>`}).join("")||`<tr><td colspan="13" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на школу с абитуриентами.</td></tr>`}</table></div></div>`}`;
+  ${rows.map(r=>{const s=tStats(r);return `<tr><td><input type="checkbox" class="trsel" value="${esc(r.uid)}"></td><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=80?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td><td><button class="btn sm" data-deltr="${esc(r.uid)}" title="Удалить абитуриента">✕</button></td></tr>`}).join("")||`<tr><td colspan="13" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на практику с абитуриентами.</td></tr>`}</table></div></div>`}`;
 }
 async function assignCourse(uids,secKey,msgEl){
   const secLabel=secName(secKey)||secKey;
@@ -1164,7 +1200,7 @@ function render(){
   if(EX&&EX.t&&p!=="exam"){clearInterval(EX.t);EX=null}
   const who=document.getElementById("who");who.textContent=st.prof?st.prof.fio.split(" ").slice(0,2).join(" ")+(isMentor()?" · наставник":""):"";who.classList.toggle("hidden",!st.prof);
   dirty=false;let html;
-  if(!P.dataReady)html=`<div class="blk"><p>Подключение к базе школы…</p></div>`;
+  if(!P.dataReady)html=`<div class="blk"><p>Подключение к базе практики…</p></div>`;
   else if(p==="mentor"){
     if(!isMentor())html=mentorGate();
     else if(a==="new"){if(SEC.some(s=>s[0]===b)){edStart(null,b);history.replaceState(null,"","#/mentor/edit/"+ED.id+"/main");lastHash=location.hash;html=editorPage("main")}else html=notFound()}
@@ -1204,6 +1240,18 @@ function bindPage(p,a,b,c){
         hl.value="";
       };
       const hld=document.getElementById("hlogodefault");if(hld)hld.onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{logo:null}))}catch(e){uiAlert("Нет прав на запись.")}};
+      const ssave=document.getElementById("specsave");if(ssave)ssave.onclick=async()=>{
+        const specialties=document.getElementById("specsta").value.split("\n").map(x=>x.trim()).filter(Boolean);
+        const levels=document.getElementById("levelsta").value.split("\n").map(x=>x.trim()).filter(Boolean);
+        try{await P.db.doc("cms/main").set(Object.assign({},CFG,{specialties,levels}));FLASH="Списки сохранены."}catch(e){uiAlert("Нет прав на запись.")}
+      };
+      app.querySelectorAll(".smx").forEach(cb=>cb.onchange=async()=>{
+        const spec=cb.dataset.s,cat=cb.dataset.c,m=Object.assign({},specMatrix());
+        const cur=new Set(m[spec]||[]);if(cb.checked)cur.add(cat);else cur.delete(cat);m[spec]=[...cur];
+        const msg=document.getElementById("smxmsg");
+        try{await P.db.doc("cms/main").set(Object.assign({},CFG,{specMatrix:m}));if(msg)msg.textContent="Сохранено "+new Date().toLocaleTimeString("ru-RU")}
+        catch(e){if(msg)msg.textContent="Не сохранено: нет прав на запись.";cb.checked=!cb.checked}
+      });
       app.querySelectorAll("[data-rolebtn]").forEach(b=>b.onclick=async()=>{
         const uid=b.dataset.rolebtn,role=b.dataset.role,p=TEAM.find(x=>x.id===uid),m=document.getElementById("teammsg");
         if(!await uiConfirm(`${role==="mentor"?"Назначить":"Снять"} права наставника для ${p?esc(p.email||p.id):uid}?`))return;
@@ -1230,13 +1278,12 @@ function bindPage(p,a,b,c){
       if(await deleteTrainee(uid,fio)){JR=null;location.hash="#/mentor/journal"}});
     return;
   }
-  if(!st.prof||p==="register"){document.getElementById("rgo").onclick=()=>{const fio=document.getElementById("rf").value.trim();if(fio.split(/\s+/).length<2){uiAlert("Введите фамилию и имя полностью.");return}st.prof={fio,spec:document.getElementById("rs").value.trim(),lvl:document.getElementById("rl").value,obj:document.getElementById("ro").value.trim(),reg:(st.prof&&st.prof.reg)||now()};save();location.hash=p==="register"?"#/progress":"#/";render()};return}
+  if(!st.prof||p==="register"){document.getElementById("rgo").onclick=()=>{const fio=document.getElementById("rf").value.trim();if(fio.split(/\s+/).length<2){uiAlert("Введите фамилию и имя полностью.");return}st.prof={fio,spec:document.getElementById("rs").value.trim(),lvl:document.getElementById("rl").value,obj:document.getElementById("ro").value.trim(),reg:(st.prof&&st.prof.reg)||now()};save();location.hash=p==="register"?"#/progress":"#/";render()};const pw2=document.getElementById("pwchange2");if(pw2)pw2.onclick=openPasswordModal;return}
   {const L0=(isMentor()?ALL:LS).find(x=>x.id===a);if(p==="l"&&L0&&!locked(L0))bindLesson(L0,b,c)}
   if(!p)bindHome();
   if(p==="trainer"){document.getElementById("trsec").onchange=e=>{TR.sec=e.target.value;trainerLoad()};document.getElementById("trnext").onclick=trainerLoad;trainerLoad()}
   if(p==="des"){document.getElementById("dessec").onchange=e=>{TR.des=e.target.value;render()};document.querySelectorAll("[data-copy]").forEach(bt=>bt.onclick=()=>{const l=LS.find(x=>x.id===bt.dataset.copy);copyText(plain(desText(l,st.desf||{},l.d.map(()=>true))),bt)})}
-  if(p==="progress"){const pw=document.getElementById("pwchange");if(pw)pw.onclick=()=>modal("Смена пароля",[{label:"Новый пароль (не короче 6 символов)",type:"password"},{label:"Повторите новый пароль",type:"password"}],
-    async v=>{if(v[0].length<6){uiAlert("Пароль должен быть не короче 6 символов.");return false}if(v[0]!==v[1]){uiAlert("Пароли не совпадают.");return false}await updatePassword(v[0]);uiAlert("Пароль изменён.")})}
+  if(p==="progress"){const pw=document.getElementById("pwchange");if(pw)pw.onclick=openPasswordModal}
   if(p==="exam"){
     const g=document.getElementById("exgo");if(g)g.onclick=examStart;
     const e=document.getElementById("exend");if(e)e.onclick=async()=>{const left=EX.qs.length-document.querySelectorAll("#exq input:checked").length;if(left&&!await uiConfirm(`Без ответа осталось вопросов: ${left}. Завершить?`))return;examFinish()};
