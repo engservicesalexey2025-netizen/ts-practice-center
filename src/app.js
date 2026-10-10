@@ -133,6 +133,7 @@ const specsList=()=>(CFG.specialties&&CFG.specialties.length?CFG.specialties:DEF
 const levelsList=()=>(CFG.levels&&CFG.levels.length?CFG.levels:DEFAULT_LEVELS);
 const specMatrix=()=>(CFG.specMatrix&&Object.keys(CFG.specMatrix).length?CFG.specMatrix:DEFAULT_SPEC_MATRIX);
 const allowedCats=spec=>{const m=specMatrix();return Object.prototype.hasOwnProperty.call(m,spec)?m[spec]:null};
+const passPct=()=>CFG.examPassPct||70;
 const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},examUnlockUsed:null});
 let st=blank();
 try{const r=localStorage.getItem(KEY);if(r)st=Object.assign(blank(),JSON.parse(r))}catch(e){}
@@ -300,14 +301,14 @@ function examPage(){
   const cats=allow?allCats.filter(c=>allow.includes(c)):allCats;
   const locked=examRetakeLocked();
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Аттестация ТН</h1>
-  <p class="mut">Все вопросы из выбранных разделов нормативной базы, которые загрузил наставник, в случайном порядке. Порог зачёта — 80 %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
+  <p class="mut">Все вопросы из выбранных разделов нормативной базы, которые загрузил наставник, в случайном порядке. Порог зачёта — ${passPct()} %. Время — 1,5 минуты на вопрос. Результат сохраняется в журнале с датой.</p>
   ${!allCats.length?`<div class="note">Наставник ещё не загрузил банк вопросов аттестации.</div>`:!cats.length?`<div class="note">Для вашей специальности («${esc(st.prof.spec||"")}») в банке аттестации пока нет доступных разделов. Обратитесь к наставнику.</div>`:locked?`<div class="note">${examRetakeMsg()}</div>`:`
   <div class="blk"><p>Аттестуемый: <b>${esc(st.prof.fio)}</b> · ${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}</p>
   <div class="chk">${cats.map(cat=>`<label><input type="checkbox" class="exs" value="${esc(cat)}" checked><span>${esc(cat)} <span class="mut sm">(${EXAMBANK[cat].length} вопросов)</span></span></label>`).join("")}</div>
   <div class="row" style="margin-top:14px"><button class="btn pri" id="exgo">Начать аттестацию</button></div></div>`}
-  ${st.ex.length?`<div class="blk"><h2 style="font-size:17px">Мои аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${st.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}`;
+  ${st.ex.length?`<div class="blk"><h2 style="font-size:17px">Мои аттестации</h2><div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${st.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=passPct()?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}`;
 }
-function examRun(){return `<h1 style="font-size:clamp(22px,3.5vw,30px)">Аттестация: ${esc(st.prof.fio)}</h1><div class="row" style="justify-content:space-between;margin:8px 0"><span class="mut">${EX.qs.length} вопросов · порог 80 %</span><span class="timer" id="timer"></span></div><div class="blk" id="exq">${quizHTML(EX.qs,"e")}</div><button class="btn pri" id="exend">Завершить и получить результат</button>`}
+function examRun(){return `<h1 style="font-size:clamp(22px,3.5vw,30px)">Аттестация: ${esc(st.prof.fio)}</h1><div class="row" style="justify-content:space-between;margin:8px 0"><span class="mut">${EX.qs.length} вопросов · порог ${passPct()} %</span><span class="timer" id="timer"></span></div><div class="blk" id="exq">${quizHTML(EX.qs,"e")}</div><button class="btn pri" id="exend">Завершить и получить результат</button>`}
 function examFinish(){
   const root=document.getElementById("exq");const g=gradeQuiz(root,EX.qs,"e");EX.ans=[...root.querySelectorAll(".q")].map(q=>{const s=q.querySelector("input:checked");return s?+s.value:-1});
   EX.ok=g.ok;EX.pc=pct(g.ok,EX.qs.length);EX.stage="done";EX.date=now();
@@ -318,7 +319,7 @@ function examResult(){
   const bySec={};EX.qs.forEach((q,i)=>{const s=q.cat;bySec[s]=bySec[s]||[0,0];bySec[s][1]++;if(EX.ans[i]===q.ans)bySec[s][0]++});
   return `<div class="blk"><h1 style="font-size:clamp(22px,3.5vw,30px)">Протокол аттестации ТН</h1>
   <p>ФИО: <b>${esc(st.prof.fio)}</b><br>Специальность: ${esc(st.prof.spec||"—")}<br>Уровень: ${esc(st.prof.lvl||"—")}<br>Дата: ${fd(EX.date)}<br>Разделы: ${esc(EX.secs.join(", "))}</p>
-  <div class="stat"><div><b>${EX.pc}%</b>результат</div><div><b>${EX.ok}/${EX.qs.length}</b>верных ответов</div><div><b style="color:${EX.pc>=80?"var(--good)":"var(--bad)"}">${EX.pc>=80?"Зачёт":"Незачёт"}</b>порог 80 %</div></div>
+  <div class="stat"><div><b>${EX.pc}%</b>результат</div><div><b>${EX.ok}/${EX.qs.length}</b>верных ответов</div><div><b style="color:${EX.pc>=passPct()?"var(--good)":"var(--bad)"}">${EX.pc>=passPct()?"Зачёт":"Незачёт"}</b>порог ${passPct()} %</div></div>
   <div class="tbl-wrap"><table class="nt"><tr><th>Раздел</th><th>Верно</th></tr>${Object.keys(bySec).sort().map(s=>`<tr><td>${esc(s)}</td><td>${bySec[s][0]} из ${bySec[s][1]}</td></tr>`).join("")}</table></div>
   ${wrong.length?`<h2 style="font-size:17px;margin:18px 0 8px">Ошибки и правильные ответы</h2>${wrong.map(x=>`<div class="q"><p>${x.i+1}. ${esc(x.q.q)}</p><div class="mut sm">Ответ: ${x.a<0?"нет ответа":esc(x.q.opts[x.a])}</div><div style="color:var(--good)">Правильно: ${esc(x.q.opts[x.q.ans])}</div>${x.q.meta&&Object.keys(x.q.meta).length?`<div class="mut sm">${Object.entries(x.q.meta).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join(" · ")}</div>`:""}</div>`).join("")}`:""}
   <p style="margin-top:20px">Подпись аттестуемого ____________ &nbsp;&nbsp; Подпись наставника ____________</p>
@@ -837,6 +838,10 @@ function mentorSettings(){
   <div class="row" style="align-items:center;gap:14px"><img src="${CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg"}" alt="Логотип" style="width:48px;height:48px;object-fit:contain;border-radius:4px;background:#fff">
   <label class="btn">Загрузить логотип<input type="file" accept="image/*" hidden id="hlogo"></label>${CFG.logo?`<button class="btn" id="hlogodefault">Вернуть логотип по умолчанию</button>`:""}<span class="sm" id="hlogomsg"></span></div></div>
   <div class="blk"><h2 style="font-size:17px">Тексты главной страницы</h2><div class="form"><label>Название в шапке сайта (рядом с логотипом)<input class="inp" id="hsite" value="${esc(CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»")}"></label><label>Заголовок<input class="inp" id="htitle" value="${esc(CFG.heroTitle||"Практика ТН ЖК")}"></label><label>Описание<textarea class="inp" rows="3" id="htext" placeholder="Оставьте пустым — будет стандартный текст">${esc(CFG.heroText||"")}</textarea></label></div><button class="btn pri" id="hsave" style="margin-top:10px">Сохранить тексты</button></div>
+  <div class="blk"><h2 style="font-size:17px">Порог зачёта аттестации</h2>
+  <p class="mut sm">Результат аттестации от этого значения и выше считается «Зачёт». Применяется сразу ко всем новым и уже сданным попыткам (журнал и печать протокола пересчитываются на лету).</p>
+  <label class="row">Порог, %<input class="inp" type="number" min="0" max="100" id="passpct" value="${passPct()}" style="max-width:100px"></label>
+  <button class="btn pri" id="passsave" style="margin-top:10px">Сохранить порог</button></div>
   <div class="blk"><h2 style="font-size:17px">Специальности и уровни ТН</h2>
   <p class="mut sm">По одному значению на строке. Эти списки показываются в анкете абитуриента (поля «Специальность» и «Уровень ТН»).</p>
   <div class="form"><label>Специальности<textarea class="inp" rows="8" id="specsta">${esc(specsList().join("\n"))}</textarea></label>
@@ -1138,7 +1143,7 @@ function journalPage(){
   <div class="blk no-print"><h2 style="font-size:16px">Назначить курс</h2><p class="mut sm">Отметьте абитуриентов в таблице ниже, выберите раздел и нажмите «Назначить» — им откроется доступ к разделу, и (если настроена отправка писем) придёт e-mail со ссылкой на сайт.</p>
   <div class="row"><select class="inp" id="asgsec">${SEC.map(s=>`<option value="${s[0]}">${esc(s[1])}</option>`).join("")}</select><button class="btn pri" id="asggo">Назначить выбранным</button><span class="sm" id="asgmsg"></span></div></div>
   <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th></th><th>ФИО</th><th>Специальность</th><th>Уровень</th><th>Лекции с</th><th>Лекций освоено</th><th>Разделов закрыто</th><th>Ср. тест</th><th>Дефекты</th><th>Посл. активность</th><th>Аттестация</th><th>Открыто разделов</th><th></th></tr>
-  ${rows.map(r=>{const s=tStats(r);return `<tr><td><input type="checkbox" class="trsel" value="${esc(r.uid)}"></td><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=80?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td><td><button class="btn sm" data-deltr="${esc(r.uid)}" title="Удалить абитуриента">✕</button></td></tr>`}).join("")||`<tr><td colspan="13" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на практику с абитуриентами.</td></tr>`}</table></div></div>`}`;
+  ${rows.map(r=>{const s=tStats(r);return `<tr><td><input type="checkbox" class="trsel" value="${esc(r.uid)}"></td><td><a href="#/mentor/t/${encodeURIComponent(r.uid)}">${esc(r.prof.fio)}</a></td><td>${esc(r.prof.spec||"")}</td><td>${esc(r.prof.lvl||"")}</td><td>${fdd(r.prof.reg)}</td><td>${s.done}/${LS.length}</td><td>${s.ms}/${SEC.length}</td><td>${s.avg!=null?s.avg+"%":"—"}</td><td>${s.fp!=null?s.fp+"%":"—"}</td><td>${fd(s.last)}</td><td>${s.ex?`<span class="pill ${s.ex.pc>=passPct()?"ok":"no"}">${s.ex.pc}% · ${fdd(s.ex.date)}</span>`:"—"}</td><td>${accOf(r.uid).length}/${SEC.length}</td><td><button class="btn sm" data-deltr="${esc(r.uid)}" title="Удалить абитуриента">✕</button></td></tr>`}).join("")||`<tr><td colspan="13" class="mut">Пока никто не зарегистрировался. Поделитесь ссылкой на практику с абитуриентами.</td></tr>`}</table></div></div>`}`;
 }
 async function assignCourse(uids,secKey,msgEl){
   const secLabel=secName(secKey)||secKey;
@@ -1174,14 +1179,14 @@ function traineePage(uid){
   ${(r.ex||[]).length?`<div class="blk"><h2 style="font-size:16px">Аттестации</h2>
   <p class="mut sm">После каждой аттестации повторное прохождение заблокировано, пока вы не назначите дату пересдачи.</p>
   <div class="row no-print"><label>Дата пересдачи<input type="date" class="inp" id="retakedate" value="${esc(retakeOf(uid))}"></label><button class="btn pri" id="retakesave" data-u="${esc(uid)}">Назначить</button><span class="sm" id="retakemsg">${retakeOf(uid)?"Назначено: "+fdd(retakeOf(uid)):"Не назначено — повторный допуск закрыт"}</span></div>
-  <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=80?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
+  <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=passPct()?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
   ${SEC.map(sc=>`<div class="blk"><h2 style="font-size:16px">${sc[0]}. ${esc(sc[1])}${LS.filter(l=>l.s===sc[0]).every(l=>lp2[l.id]&&lp2[l.id].p)?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Шаги</th><th>Найди дефект</th><th>DES</th><th>Тест (попыток)</th><th>Освоен</th></tr>${LS.filter(l=>l.s===sc[0]).map(l=>{const x=lp2[l.id]||{};return `<tr><td>${l.id}. ${esc(l.t)}</td><td>${fd(x.o)}</td><td>${lessonSteps(l).filter(s=>x.v&&x.v[s]).length}/${lessonSteps(l).length}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}${x.seen&&!x.fall?" · смотрел ответы":""}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?`ошибки (${x.da})`:"—"}</td><td>${x.q!=null?`${x.q}% (${x.qa||1})`:"—"}</td><td>${x.p?fd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
 }
 async function journalCsv(btn){
   const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
-  const head=["ФИО","Специальность","Уровень","Объект","Лекции с","Освоено лекций","Всего лекций","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Дата аттестации","Открытые разделы",...LS.map(l=>"Пройден "+l.id)];
-  const body=JR.rows.map(r=>{const s=tStats(r),lp2=r.lp||{};return[r.prof.fio,r.prof.spec,r.prof.lvl,r.prof.obj,fdd(r.prof.reg),s.done,LS.length,s.avg,s.fp,fd(s.last),s.ex?s.ex.pc:"",s.ex?fdd(s.ex.date):"",accOf(r.uid).join(" "),...LS.map(l=>lp2[l.id]&&lp2[l.id].p?fdd(lp2[l.id].p):"")].map(q).join(";")});
-  try{await P.dl.save({filename:"zhurnal-shkola-tn-"+new Date().toISOString().slice(0,10)+".csv",data:"\ufeff"+[head.map(q).join(";"),...body].join("\r\n")})}catch(e){if(e&&e.code!=="cancelled")uiAlert("Скачивание недоступно в этом окне.")}
+  const head=["ФИО","Специальность","Уровень","Объект","Лекции с","Освоено лекций","Всего лекций","Средний балл тестов","Найдено дефектов %","Последняя активность","Последняя аттестация %","Результат аттестации","Дата аттестации","Открытые разделы",...LS.map(l=>"Пройден "+l.id)];
+  const body=JR.rows.map(r=>{const s=tStats(r),lp2=r.lp||{};return[r.prof.fio,r.prof.spec,r.prof.lvl,r.prof.obj,fdd(r.prof.reg),s.done,LS.length,s.avg,s.fp,fd(s.last),s.ex?s.ex.pc:"",s.ex?(s.ex.pc>=passPct()?"Зачёт":"Незачёт"):"",s.ex?fdd(s.ex.date):"",accOf(r.uid).join(" "),...LS.map(l=>lp2[l.id]&&lp2[l.id].p?fdd(lp2[l.id].p):"")].map(q).join(";")});
+  try{await P.dl.save({filename:"zhurnal-praktika-tn-"+new Date().toISOString().slice(0,10)+".csv",data:"\ufeff"+[head.map(q).join(";"),...body].join("\r\n")})}catch(e){if(e&&e.code!=="cancelled")uiAlert("Скачивание недоступно в этом окне.")}
 }
 
 /* ================= МАРШРУТИЗАЦИЯ ================= */
@@ -1240,6 +1245,11 @@ function bindPage(p,a,b,c){
         hl.value="";
       };
       const hld=document.getElementById("hlogodefault");if(hld)hld.onclick=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{logo:null}))}catch(e){uiAlert("Нет прав на запись.")}};
+      const psave=document.getElementById("passsave");if(psave)psave.onclick=async()=>{
+        const v=+document.getElementById("passpct").value;
+        if(!Number.isFinite(v)||v<0||v>100){uiAlert("Введите число от 0 до 100.");return}
+        try{await P.db.doc("cms/main").set(Object.assign({},CFG,{examPassPct:v}));FLASH="Порог сохранён."}catch(e){uiAlert("Нет прав на запись.")}
+      };
       const ssave=document.getElementById("specsave");if(ssave)ssave.onclick=async()=>{
         const specialties=document.getElementById("specsta").value.split("\n").map(x=>x.trim()).filter(Boolean);
         const levels=document.getElementById("levelsta").value.split("\n").map(x=>x.trim()).filter(Boolean);
