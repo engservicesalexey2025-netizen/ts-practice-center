@@ -9,7 +9,7 @@
 import { N, BASE_SEC, BASE, nm } from "./data/lessons.js";
 import { esc, enc } from "./utils.js";
 import { uiConfirm, uiPrompt, uiAlert } from "./ui/dialogs.js";
-import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole } from "./platform.js";
+import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole, updatePassword } from "./platform.js";
 import { parseWorkbook, pickRandom } from "./examBank.js";
 
 const LOGO_FULL="/logo-full.jpg";
@@ -306,7 +306,7 @@ function examResult(){
 function progressPage(){
   const done=LS.filter(l=>isDone(l.id)).length,qv=LS.map(l=>st.lp[l.id]&&st.lp[l.id].q).filter(x=>x!=null),avg=qv.length?Math.round(qv.reduce((a,b)=>a+b,0)/qv.length):0;
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Мой прогресс</h1>
-  <div class="blk"><div class="row" style="justify-content:space-between"><div><b>${esc(st.prof.fio)}</b><br><span class="mut">${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}${st.prof.obj?" · "+esc(st.prof.obj):""} · лекции с ${fdd(st.prof.reg)}</span></div><div class="row"><a class="btn pri" href="#/exam">Пройти аттестацию</a><a class="btn" href="#/register">Изменить данные</a></div></div>
+  <div class="blk"><div class="row" style="justify-content:space-between"><div><b>${esc(st.prof.fio)}</b><br><span class="mut">${esc(st.prof.spec||"")} · ${esc(st.prof.lvl||"")}${st.prof.obj?" · "+esc(st.prof.obj):""} · лекции с ${fdd(st.prof.reg)}</span></div><div class="row"><a class="btn pri" href="#/exam">Пройти аттестацию</a><a class="btn" href="#/register">Изменить данные</a><button class="btn" id="pwchange">Сменить пароль</button></div></div>
   ${P.writeFail?`<p class="note">Результаты не удалось записать в общую базу — проверьте подключение к интернету и обновите страницу. Пока данные сохраняются в этом браузере.</p>`:""}</div>
   <div class="stat"><div><b>${done}</b>лекций освоено из ${LS.length}</div><div><b>${SEC.filter(s=>secMastered(s[0])).length}</b>разделов закрыто из ${SEC.length}</div><div><b>${avg}%</b>средний балл блиц-тестов</div><div><b>${pct(st.tr.hit,st.tr.tot)}%</b>дефектов найдено</div><div><b>${st.ex.length}</b>аттестаций</div></div>
   ${SEC.map(s=>`<div class="blk"><h2 style="font-size:16px">${s[0]}. ${esc(s[1])} · ${secDone(s[0])}/${secCnt(s[0])}${secMastered(s[0])?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Найди дефект</th><th>DES</th><th>Тест</th><th>Освоен</th></tr>${LS.filter(l=>l.s===s[0]).map(l=>{const x=st.lp[l.id]||{};return `<tr><td><a href="#/l/${l.id}">${l.id}. ${esc(l.t)}</a></td><td>${fdd(x.o)}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?"ошибки":"—"}</td><td>${x.q!=null?x.q+"%":"—"}</td><td>${x.p?fdd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
@@ -380,12 +380,12 @@ function lessonDoc(l){const o={};["ex","et","id","t","sc","kw","d","c","p","n","
 async function quickSave(l,mut){const doc=lessonDoc(ALL.find(x=>x.id===l.id)||l);mut(doc);await P.db.doc("cms/main/lessons/"+l.id).set(doc)}
 function modal(title,fields,onSave,opt={}){
   const d=document.createElement("div");d.className="lb";
-  d.innerHTML=`<div class="mdl" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3 style="font-size:17px;margin-bottom:12px">${esc(title)}</h3><div class="form">${fields.map((f,i)=>`<label>${esc(f.label)}${f.type==="area"?`<textarea class="inp" rows="${f.rows||5}" data-mi="${i}" placeholder="${esc(f.ph||"")}">${esc(f.value||"")}</textarea>`:`<input class="inp" data-mi="${i}" value="${esc(f.value||"")}" placeholder="${esc(f.ph||"")}">`}</label>`).join("")}</div>
+  d.innerHTML=`<div class="mdl" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3 style="font-size:17px;margin-bottom:12px">${esc(title)}</h3><div class="form">${fields.map((f,i)=>`<label>${esc(f.label)}${f.type==="area"?`<textarea class="inp" rows="${f.rows||5}" data-mi="${i}" placeholder="${esc(f.ph||"")}">${esc(f.value||"")}</textarea>`:`<input class="inp" type="${f.type==="password"?"password":"text"}" data-mi="${i}" value="${esc(f.value||"")}" placeholder="${esc(f.ph||"")}" autocomplete="${f.type==="password"?"new-password":"off"}">`}</label>`).join("")}</div>
   <div class="row" style="margin-top:14px"><button class="btn pri" data-ms>Сохранить</button><button class="btn" data-mc>Отмена</button>${opt.del?`<button class="btn" data-md style="margin-left:auto">Удалить</button>`:""}</div><div class="sm" data-mm style="margin-top:8px;color:var(--bad)"></div></div>`;
   document.body.appendChild(d);const close=()=>d.remove();const msg=d.querySelector("[data-mm]");
   d.addEventListener("click",e=>{if(e.target===d)close()});d.querySelector("[data-mc]").onclick=close;
   d.addEventListener("keydown",e=>{if(e.key==="Escape")close()});
-  const run=async fn=>{msg.style.color="var(--mut)";msg.textContent="Сохраняю…";try{const r=await fn();if(r===false){return}close()}catch(e){msg.style.color="var(--bad)";msg.textContent=typeof e==="string"?e:"Не сохранено: нет прав на запись (нужна роль «Наставник»)."}};
+  const run=async fn=>{msg.style.color="var(--mut)";msg.textContent="Сохраняю…";try{const r=await fn();if(r===false){return}close()}catch(e){msg.style.color="var(--bad)";msg.textContent=typeof e==="string"?e:(e&&e.message)?e.message:"Не сохранено: нет прав на запись (нужна роль «Наставник»)."}};
   d.querySelector("[data-ms]").onclick=()=>run(()=>onSave([...d.querySelectorAll("[data-mi]")].map(x=>x.value)));
   if(opt.del)d.querySelector("[data-md]").onclick=async()=>{if(await uiConfirm("Удалить?"))run(opt.del)};
   const first=d.querySelector("[data-mi]");if(first)first.focus();
@@ -1235,6 +1235,8 @@ function bindPage(p,a,b,c){
   if(!p)bindHome();
   if(p==="trainer"){document.getElementById("trsec").onchange=e=>{TR.sec=e.target.value;trainerLoad()};document.getElementById("trnext").onclick=trainerLoad;trainerLoad()}
   if(p==="des"){document.getElementById("dessec").onchange=e=>{TR.des=e.target.value;render()};document.querySelectorAll("[data-copy]").forEach(bt=>bt.onclick=()=>{const l=LS.find(x=>x.id===bt.dataset.copy);copyText(plain(desText(l,st.desf||{},l.d.map(()=>true))),bt)})}
+  if(p==="progress"){const pw=document.getElementById("pwchange");if(pw)pw.onclick=()=>modal("Смена пароля",[{label:"Новый пароль (не короче 6 символов)",type:"password"},{label:"Повторите новый пароль",type:"password"}],
+    async v=>{if(v[0].length<6){uiAlert("Пароль должен быть не короче 6 символов.");return false}if(v[0]!==v[1]){uiAlert("Пароли не совпадают.");return false}await updatePassword(v[0]);uiAlert("Пароль изменён.")})}
   if(p==="exam"){
     const g=document.getElementById("exgo");if(g)g.onclick=examStart;
     const e=document.getElementById("exend");if(e)e.onclick=async()=>{const left=EX.qs.length-document.querySelectorAll("#exq input:checked").length;if(left&&!await uiConfirm(`Без ответа осталось вопросов: ${left}. Завершить?`))return;examFinish()};

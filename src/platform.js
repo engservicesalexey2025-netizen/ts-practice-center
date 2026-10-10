@@ -179,6 +179,11 @@ export async function signOut() {
   await supabase.auth.signOut();
 }
 
+export async function updatePassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw wrapError(error);
+}
+
 export function mountLoginScreen(container) {
   if (!configured) {
     container.innerHTML = `<div class="blk" style="max-width:520px;margin:40px auto">
