@@ -108,6 +108,12 @@ export async function notifyAssignment({ uids, category, siteUrl }) {
   return data;
 }
 
+export async function inviteTrainee({ email, fio, siteUrl }) {
+  const { data, error } = await supabase.functions.invoke("invite-trainee", { body: { email, fio, siteUrl } });
+  if (error) throw wrapError(error);
+  return data;
+}
+
 async function currentAuthUser() {
   const { data } = await supabase.auth.getUser();
   return data && data.user;

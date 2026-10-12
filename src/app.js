@@ -9,7 +9,7 @@
 import { N, BASE_SEC, BASE, nm } from "./data/lessons.js";
 import { esc, enc } from "./utils.js";
 import { uiConfirm, uiPrompt, uiAlert } from "./ui/dialogs.js";
-import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole, updatePassword } from "./platform.js";
+import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole, updatePassword, inviteTrainee } from "./platform.js";
 import { parseWorkbook, pickRandom } from "./examBank.js";
 import { validMatchQ, buildMatchRuntime, renderMatch, gradeMatch, validOrderQ, buildOrderRuntime, renderOrder, gradeOrder, bindOrderQ } from "./quizTypes.js";
 
@@ -1335,10 +1335,13 @@ async function loadJournal(){
   JR={loading:true,rows:[]};
   try{
     const s=await P.db.collection("trainees").limit(1000).get();
-    JR={rows:s.docs.map(d=>Object.assign({uid:d.id},clone(d.data()))).filter(r=>r.prof),acc:{},retake:{}};
+    const withProf=new Set();
+    const rows=s.docs.map(d=>Object.assign({uid:d.id},clone(d.data()))).filter(r=>{if(r.prof)withProf.add(r.uid);return r.prof});
+    JR={rows,acc:{},retake:{},pending:[]};
+    try{const profiles=await listProfiles();JR.pending=profiles.filter(p=>p.role==="trainee"&&!withProf.has(p.id))}catch(e){}
     try{const a=await P.db.collection("cms/main/access").limit(1000).get();a.docs.forEach(d=>{JR.acc[d.id]=clone(d.data())})}catch(e){}
     try{const rt=await P.db.collection("cms/main/examRetake").limit(1000).get();rt.docs.forEach(d=>{JR.retake[d.id]=clone(d.data())})}catch(e){}
-  }catch(e){JR={rows:[],acc:{},retake:{},err:true}}
+  }catch(e){JR={rows:[],acc:{},retake:{},pending:[],err:true}}
   if(location.hash.startsWith("#/mentor/journal")||location.hash.startsWith("#/mentor/t/"))render();
 }
 const retakeOf=uid=>(JR&&JR.retake&&JR.retake[uid]&&JR.retake[uid].date)||"";
@@ -1362,6 +1365,11 @@ function journalPage(){
   <div class="row" style="margin:10px 0"><input class="inp" id="jq" placeholder="Поиск по ФИО, специальности, объекту" value="${esc(JR.q||"")}" style="min-width:280px"><button class="btn" id="jre">Обновить</button>${P.dl?`<button class="btn pri" id="jcsv">Скачать журнал (CSV для Excel)</button>`:""}<button class="btn" id="jpr">Печать</button></div>
   <div class="extabs"><button type="button" class="${JR.view==="acc"?"":"on"}" data-jv="list">Журнал</button><button type="button" class="${JR.view==="acc"?"on":""}" data-jv="acc">Доступ к разделам ✓</button></div>
   <p class="mut sm">Абитуриентов: ${JR.rows.length}. Лекций в курсе: ${LS.length}.</p>${JR.view==="acc"?accMatrix(rows):`
+  <div class="blk no-print"><h2 style="font-size:16px">Пригласить абитуриента</h2><p class="mut sm">Укажите e-mail и ФИО — человеку придёт письмо со ссылкой для входа. После первого входа он появится в списке ниже.</p>
+  <div class="row"><input class="inp" id="invemail" type="email" placeholder="email@example.com" style="min-width:220px"><input class="inp" id="invfio" placeholder="Фамилия Имя" style="min-width:220px"><button class="btn pri" id="invgo">Пригласить</button><span class="sm" id="invmsg"></span></div></div>
+  ${JR.pending&&JR.pending.length?`<div class="blk no-print"><h2 style="font-size:16px">Зарегистрировались, анкета не заполнена</h2>
+  <p class="mut sm">Эти люди уже создали аккаунт на сайте (сами или по приглашению), но ещё не заполнили анкету — после этого появятся в основном списке ниже.</p>
+  <div class="tbl-wrap"><table class="nt"><tr><th>E-mail</th></tr>${JR.pending.map(p=>`<tr><td>${esc(p.email||p.id)}</td></tr>`).join("")}</table></div></div>`:""}
   <div class="blk no-print"><h2 style="font-size:16px">Назначить курс</h2><p class="mut sm">Отметьте абитуриентов в таблице ниже, выберите раздел и нажмите «Назначить» — им откроется доступ к разделу, и (если настроена отправка писем) придёт e-mail со ссылкой на сайт.</p>
   <div class="row"><select class="inp" id="asgsec">${SEC.map(s=>`<option value="${s[0]}">${esc(s[1])}</option>`).join("")}</select><button class="btn pri" id="asggo">Назначить выбранным</button><span class="sm" id="asgmsg"></span></div></div>
   <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th></th><th>ФИО</th><th>Специальность</th><th>Уровень</th><th>Лекции с</th><th>Лекций освоено</th><th>Разделов закрыто</th><th>Ср. тест</th><th>Дефекты</th><th>Посл. активность</th><th>Аттестация</th><th>Открыто разделов</th><th></th></tr>
@@ -1515,6 +1523,13 @@ function bindPage(p,a,b,c){
         const sec=document.getElementById("asgsec").value;
         if(!await uiConfirm(`Назначить раздел «${secName(sec)}» выбранным абитуриентам (${uids.length})?`))return;
         await assignCourse(uids,sec,m);
+      };
+      const ig=document.getElementById("invgo");if(ig)ig.onclick=async()=>{
+        const email=document.getElementById("invemail").value.trim(),fio=document.getElementById("invfio").value.trim(),m=document.getElementById("invmsg");
+        if(!email||!/^\S+@\S+\.\S+$/.test(email)){m.textContent="Введите корректный e-mail.";return}
+        m.textContent="Отправляю приглашение…";
+        try{const r=await inviteTrainee({email,fio,siteUrl:location.origin});m.textContent=r&&r.ok?(r.mode==="invite"?"Приглашение отправлено.":"Эта почта уже зарегистрирована — отправлена ссылка для входа."):"Не удалось отправить письмо: функция уведомлений ещё не настроена.";document.getElementById("invemail").value="";document.getElementById("invfio").value=""}
+        catch(e){m.textContent="Не удалось отправить приглашение: функция invite-trainee ещё не настроена (см. Supabase → Edge Functions)."}
       };}
     const jp=document.getElementById("jpr");if(jp)jp.onclick=()=>window.print();
     app.querySelectorAll("[data-deltr]").forEach(bt=>bt.onclick=async()=>{
