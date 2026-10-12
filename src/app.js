@@ -14,6 +14,10 @@ import { parseWorkbook, pickRandom } from "./examBank.js";
 import { validMatchQ, buildMatchRuntime, renderMatch, gradeMatch, validOrderQ, buildOrderRuntime, renderOrder, gradeOrder, bindOrderQ } from "./quizTypes.js";
 
 const LOGO_FULL="/logo-full.jpg";
+/* Реальный адрес сайта — зашит явно, а не location.origin, чтобы письма
+   (приглашение, уведомление о назначении) никогда не ссылались на localhost,
+   если наставник отправляет их из локальной версии при тестировании. */
+const SITE_URL="https://ts-practice-center.pages.dev";
 let SEC=BASE_SEC.map(s=>s.slice());
 let LS=[],ALL=[];
 const secName=k=>(SEC.find(s=>s[0]===k)||[])[1]||"";
@@ -1384,7 +1388,7 @@ async function assignCourse(uids,secKey,msgEl){
   }
   msgEl.textContent="Доступ назначен. Отправляю уведомления…";
   try{
-    const r=await notifyAssignment({uids,category:secLabel,siteUrl:location.origin});
+    const r=await notifyAssignment({uids,category:secLabel,siteUrl:SITE_URL});
     const ok=(r&&r.results||[]).filter(x=>x.ok).length;
     msgEl.textContent=`Доступ назначен (${uids.length}). Писем отправлено: ${ok} из ${uids.length}.`;
   }catch(e){
@@ -1528,7 +1532,7 @@ function bindPage(p,a,b,c){
         const email=document.getElementById("invemail").value.trim(),fio=document.getElementById("invfio").value.trim(),m=document.getElementById("invmsg");
         if(!email||!/^\S+@\S+\.\S+$/.test(email)){m.textContent="Введите корректный e-mail.";return}
         m.textContent="Отправляю приглашение…";
-        try{const r=await inviteTrainee({email,fio,siteUrl:location.origin});m.textContent=r&&r.ok?(r.mode==="invite"?"Приглашение отправлено.":"Эта почта уже зарегистрирована — отправлена ссылка для входа."):"Не удалось отправить письмо: функция уведомлений ещё не настроена.";document.getElementById("invemail").value="";document.getElementById("invfio").value=""}
+        try{const r=await inviteTrainee({email,fio,siteUrl:SITE_URL});m.textContent=r&&r.ok?(r.mode==="invite"?"Приглашение отправлено.":"Эта почта уже зарегистрирована — отправлена ссылка для входа."):"Не удалось отправить письмо: функция уведомлений ещё не настроена.";document.getElementById("invemail").value="";document.getElementById("invfio").value=""}
         catch(e){m.textContent="Не удалось отправить приглашение: функция invite-trainee ещё не настроена (см. Supabase → Edge Functions)."}
       };}
     const jp=document.getElementById("jpr");if(jp)jp.onclick=()=>window.print();
