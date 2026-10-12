@@ -1436,6 +1436,7 @@ function render(){
   if(top)top.classList.remove("hidden");if(foot)foot.classList.remove("hidden");if(signout)signout.classList.remove("hidden");
   const sn=document.getElementById("sitename");if(sn)sn.textContent=CFG.siteName||"ЦЕНТР «ПРАКТИКА ТН»";
   const li=document.getElementById("logo-img");if(li)li.src=CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg";
+  const fi=document.querySelector('link[rel="icon"]');if(fi)fi.href=CFG.logo?blobUrl(CFG.logo):"/logo-small.jpg";
   rebuild();
   const h=(location.hash||"#/").replace(/^#\/?/,"");const [p,a,b,c]=h.split("/");
   document.getElementById("upd").classList.add("hidden");
