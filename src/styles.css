@@ -105,6 +105,18 @@ table{border-collapse:collapse;width:100%}
 .q label:hover{background:var(--soft)}
 .q label.right{background:rgba(46,125,79,.18)}.q label.wrong{background:rgba(210,58,46,.18)}
 .q input{margin-top:4px;accent-color:var(--ink)}
+.match-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 8px;border-radius:6px;margin-bottom:4px}
+.match-row select{min-width:70px}
+.match-row.right{background:rgba(46,125,79,.18)}
+.match-row.wrong{background:rgba(210,58,46,.18)}
+.match-legend{margin-top:8px}
+.order-list{list-style:none;margin:0;padding:0}
+.order-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;background:var(--card)}
+.order-list li.right{background:rgba(46,125,79,.18)}
+.order-list li.wrong{background:rgba(210,58,46,.18)}
+.hotq .task-wrap{cursor:crosshair;max-width:480px}
+.hq-mark{fill:#2471a3;stroke:#fff;stroke-width:3;opacity:.9}
+.hq-click-wrong{fill:none;stroke:#D23A2E;stroke-width:3}
 .pager{display:flex;justify-content:space-between;gap:10px;margin-top:22px}
 .lcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
 .lcard{display:flex;flex-direction:column;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}

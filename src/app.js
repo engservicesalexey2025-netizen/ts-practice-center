@@ -11,6 +11,7 @@ import { esc, enc } from "./utils.js";
 import { uiConfirm, uiPrompt, uiAlert } from "./ui/dialogs.js";
 import { db as platformDb, user as platformUser, assets as platformAssets, downloads as platformDownloads, blobUrl, onAuthChange, signOut, mountLoginScreen, notifyAssignment, listProfiles, setProfileRole, updatePassword } from "./platform.js";
 import { parseWorkbook, pickRandom } from "./examBank.js";
+import { validMatchQ, buildMatchRuntime, renderMatch, gradeMatch, validOrderQ, buildOrderRuntime, renderOrder, gradeOrder, bindOrderQ } from "./quizTypes.js";
 
 const LOGO_FULL="/logo-full.jpg";
 let SEC=BASE_SEC.map(s=>s.slice());
@@ -94,8 +95,22 @@ function genQ(l,type,r){
   if(!l.a)return null;return{q:`Какое действие корректно записать в замечание DES по теме «${l.t}»?`,a:l.a,o:shuffle(WRONG_ACT,r).slice(0,3)};
 }
 function buildQ(l,type,r){const order=[type,"viol","why","norm","chk","act"];let g=null;for(const t of order){g=genQ(l,t,r);if(g)break}if(!g)return null;const opts=shuffle([g.a,...g.o],r);return{q:g.q,opts,ans:opts.indexOf(g.a),lid:l.id}}
-function quizHTML(qs,name){return qs.map((q,i)=>`<div class="q" data-i="${i}"><p>${i+1}. ${esc(q.q)}</p>${q.opts.map((o,j)=>`<label><input type="radio" name="${name}${i}" value="${j}"><span>${esc(o)}</span></label>`).join("")}</div>`).join("")}
-function gradeQuiz(root,qs,name){let ok=0,answered=0;qs.forEach((q,i)=>{const box=root.querySelector(`.q[data-i="${i}"]`);const sel=box.querySelector(`input[name="${name}${i}"]:checked`);if(sel)answered++;box.querySelectorAll("label").forEach((lb,j)=>{lb.classList.remove("right","wrong");if(j===q.ans)lb.classList.add("right");else if(sel&&+sel.value===j)lb.classList.add("wrong")});box.querySelectorAll("input").forEach(x=>x.disabled=true);if(sel&&+sel.value===q.ans)ok++});return{ok,answered}}
+function renderSingle(q,i,name){return `<div class="q" data-i="${i}"><p>${i+1}. ${esc(q.q)}</p>${q.opts.map((o,j)=>`<label><input type="radio" name="${name}${i}" value="${j}"><span>${esc(o)}</span></label>`).join("")}</div>`}
+function gradeSingle(root,q,i,name){const box=root.querySelector(`.q[data-i="${i}"]`);const sel=box.querySelector(`input[name="${name}${i}"]:checked`);const answered=!!sel;box.querySelectorAll("label").forEach((lb,j)=>{lb.classList.remove("right","wrong");if(j===q.ans)lb.classList.add("right");else if(sel&&+sel.value===j)lb.classList.add("wrong")});box.querySelectorAll("input").forEach(x=>x.disabled=true);const ok=!!(sel&&+sel.value===q.ans);return{ok,answered,score:ok?1:0}}
+function quizHTML(qs,name){return qs.map((q,i)=>
+  q.type==="match"?renderMatch(q,i,name):
+  q.type==="order"?renderOrder(q,i,name):
+  q.type==="hotspot"?renderHotspot(q,i,name):
+  renderSingle(q,i,name)
+).join("")}
+function gradeQuiz(root,qs,name){let ok=0,answered=0;const details=[];qs.forEach((q,i)=>{
+  const r=q.type==="match"?gradeMatch(root,q,i,name):
+          q.type==="order"?gradeOrder(root,q,i,name):
+          q.type==="hotspot"?gradeHotspot(root,q,i,name):
+          gradeSingle(root,q,i,name);
+  if(r.answered)answered++;if(r.ok)ok++;details.push(r)});
+  return{ok,answered,total:qs.length,details}}
+function bindQuizExtras(root,qs,name){qs.forEach((q,i)=>{if(q.type==="order")bindOrderQ(root,q,i,name);else if(q.type==="hotspot")bindHotspotQ(root,q,i,name)})}
 
 /* ---------- links ---------- */
 const lk={
@@ -134,7 +149,7 @@ const levelsList=()=>(CFG.levels&&CFG.levels.length?CFG.levels:DEFAULT_LEVELS);
 const specMatrix=()=>(CFG.specMatrix&&Object.keys(CFG.specMatrix).length?CFG.specMatrix:DEFAULT_SPEC_MATRIX);
 const allowedCats=spec=>{const m=specMatrix();return Object.prototype.hasOwnProperty.call(m,spec)?m[spec]:null};
 const passPct=()=>CFG.examPassPct||70;
-const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},examUnlockUsed:null});
+const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},examUnlockUsed:null,vars:{},unlockedLessons:{}});
 let st=blank();
 try{const r=localStorage.getItem(KEY);if(r)st=Object.assign(blank(),JSON.parse(r))}catch(e){}
 let saveT=null,saving=false,saveAgain=false;
@@ -151,6 +166,14 @@ const fdd=iso=>iso?new Date(iso).toLocaleDateString("ru-RU"):"—";
 const lp=id=>(st.lp[id]=st.lp[id]||{});
 const isDone=id=>!!(st.lp[id]&&st.lp[id].p);
 const clone=o=>JSON.parse(JSON.stringify(o));
+
+/* ---------- переменные абитуриента (для триггеров) ----------
+   Декларации (имя/тип/дефолт) — CFG.vars, редактирует наставник; значения —
+   st.vars, пишет абитуриент (автосохранение через save()). */
+const varDecl=name=>(CFG.vars||[]).find(v=>v.name===name);
+const castVar=(type,v)=>type==="bool"?!!v:type==="num"?(+v||0):String(v??"");
+function getVar(name){const d=varDecl(name),type=d?d.type:"str";if(st.vars&&Object.prototype.hasOwnProperty.call(st.vars,name))return castVar(type,st.vars[name]);return castVar(type,d?d.default:undefined)}
+function setVar(name,value){const d=varDecl(name),type=d?d.type:"str",v=castVar(type,value);if(!st.vars)st.vars={};if(st.vars[name]===v)return false;st.vars[name]=v;save();return true}
 
 function rebuild(){
   SEC=[];
@@ -204,7 +227,7 @@ function initPlatform(){
 
 const isMentor=()=>!!P.canEdit;
 const isOwner=()=>P.role==="owner";
-function locked(l){if(!CFG.seq||isMentor())return false;const sl=LS.filter(x=>x.s===l.s);const i=sl.indexOf(l);return i>0&&!isDone(sl[i-1].id)}
+function locked(l){if(st.unlockedLessons&&st.unlockedLessons[l.id])return false;if(!CFG.seq||isMentor())return false;const sl=LS.filter(x=>x.s===l.s);const i=sl.indexOf(l);return i>0&&!isDone(sl[i-1].id)}
 
 /* ================= UI ================= */
 const app=document.getElementById("app");
@@ -358,6 +381,29 @@ function finder(svg,l){
     reset(){marks=[];hits=[];lockd=false;nodes.forEach(n=>n.remove());nodes=[]}};
 }
 
+/* ----- hotspot-вопрос в блиц-тесте/аттестации: один клик по схеме, засчитывается
+   попадание в радиус дефекта — урезанный до одной метки finder() ----- */
+const validHotspotQ=q=>q.q&&String(q.q).trim()&&Array.isArray(q.d)&&q.d.length===1&&Number.isFinite(q.d[0][1])&&Number.isFinite(q.d[0][2]);
+function renderHotspot(q,i,name){const id=`hq_${name}${i}`;return `<div class="q hotq" data-i="${i}"><p>${i+1}. ${esc(q.q)}</p><div class="task-wrap">${svgOf(q,"task",id)}</div><p class="mut sm">Кликните по схеме в месте, где показано нарушение.</p></div>`}
+function bindHotspotQ(root,q,i,name){
+  const id=`hq_${name}${i}`,svg=root.querySelector("#"+id);if(!svg)return;const box=svg.closest(".q");
+  svg.addEventListener("click",e=>{
+    if(box.dataset.graded)return;const p=svgPt(svg,e);
+    let mark=svg.querySelector(".hq-mark");
+    if(!mark){mark=document.createElementNS(NS,"circle");mark.setAttribute("class","hq-mark");mark.setAttribute("r",16);svg.appendChild(mark)}
+    mark.setAttribute("cx",p.x);mark.setAttribute("cy",p.y);box.dataset.cx=p.x;box.dataset.cy=p.y;box.dataset.touched="1"
+  });
+}
+function gradeHotspot(root,q,i,name){
+  const id=`hq_${name}${i}`,svg=root.querySelector("#"+id),box=svg?svg.closest(".q"):root.querySelector(`.q[data-i="${i}"]`);
+  const answered=!!(box&&box.dataset.touched==="1");const d=q.d[0],k=geo(q).k;let ok=false;
+  if(answered){const cx=+box.dataset.cx,cy=+box.dataset.cy;ok=Math.hypot(cx-d[1],cy-d[2])<=(d[5]||52*k)}
+  if(box)box.dataset.graded="1";
+  if(svg){svg.querySelectorAll(".hq-mark").forEach(m=>m.remove());const g=document.createElementNS(NS,"g");g.innerHTML=ringNum(d[1],d[2],1,ok?"ring-hit":"ring-miss",k);svg.appendChild(g);
+    if(answered&&!ok){const miss=document.createElementNS(NS,"circle");miss.setAttribute("cx",box.dataset.cx);miss.setAttribute("cy",box.dataset.cy);miss.setAttribute("r",10);miss.setAttribute("class","hq-click-wrong");svg.appendChild(miss)}}
+  return{ok,answered,score:ok?1:0};
+}
+
 function trainerLoad(){
   const pool=LS.filter(l=>(TR.sec==="all"||l.s===TR.sec)&&!locked(l)).flatMap(l=>exAll(l).filter(e=>e.d.length).map(e=>Object.assign(e,{lid:l.id,lt:l.t,key:l.id+":"+e.i})));const box=document.getElementById("trbox");
   if(!pool.length){box.innerHTML=`<p class="mut">В этом разделе пока нет открытых лекций с разметкой дефектов.</p>`;return}
@@ -393,18 +439,53 @@ const autoLnk=l=>[["Фото выполнения работ",lk.ya(l)],["Фот
 const effVids=l=>l.vidsSet?(l.vids||[]):[...(l.vids||[]).filter(validLink),...(l.auto===false?[]:autoVids(l))];
 const effLnk=l=>l.lnkSet?(l.lnk||[]):[...(l.lnk||[]).filter(validLink),...(l.auto===false?[]:autoLnk(l))];
 function needs(l,x){return{find:CFG.needAll===false||!exAll(l).some(e=>e.d.length)||taskDone(l,x),des:!l.d.length||!!x.dp,quiz:(x.q||0)>=80,vis:lessonSteps(l).every(k=>x.v&&x.v[k])}}
-function tryPass(l,x){if(x.p)return false;const n=needs(l,x);if(n.vis&&n.find&&n.des&&n.quiz){x.p=now();return true}return false}
+function tryPass(l,x){if(x.p)return false;const n=needs(l,x);if(n.vis&&n.find&&n.des&&n.quiz){x.p=now();evalTriggers(l,x,{event:"lessonPass"});return true}return false}
+
+/* ================= ТРИГГЕРЫ (условная логика наставника) =================
+   l.trig — массив правил вида {id,name,on:{step,event},when:[{var,op,val}],
+   setVar:{name,value},jump:{kind:"step"|"lesson",target},once}. Пустой/не
+   заданный l.trig — нулевая стоимость (ранний выход), полностью совместимо
+   с лекциями без триггеров. */
+function cmp(a,op,b){
+  if(op==="eq")return a===b;if(op==="neq")return a!==b;
+  if(op==="gt")return +a>+b;if(op==="gte")return +a>=+b;
+  if(op==="lt")return +a<+b;if(op==="lte")return +a<=+b;
+  return false;
+}
+function matchesEvent(on,ev){return on&&ev&&on.step===ev.step&&on.event===ev.event}
+function runJump(l,x,jump){
+  if(!jump||!jump.target)return;
+  if(jump.kind==="lesson"){st.unlockedLessons=st.unlockedLessons||{};st.unlockedLessons[jump.target]=true;save();location.hash="#/l/"+jump.target;return}
+  if(jump.kind==="step"){const s=lessonSteps(l),i=s.indexOf(jump.target);if(i<0)return;x.skip=x.skip||{};
+    s.forEach((k,j)=>{if(j<i&&!(x.v&&x.v[k]))x.skip[k]=true});
+    location.hash="#/l/"+l.id+"/"+jump.target;
+  }
+}
+function evalTriggers(l,x,ev){
+  if(!l.trig||!l.trig.length)return;
+  x.trigFired=x.trigFired||{};
+  l.trig.forEach(r=>{
+    if(!matchesEvent(r.on,ev))return;
+    if(r.once!==false&&x.trigFired[r.id])return;
+    if(!(r.when||[]).every(c=>cmp(getVar(c.var),c.op,c.val)))return;
+    if(r.setVar)setVar(r.setVar.name,r.setVar.value);
+    x.trigFired[r.id]={name:r.name||"",at:now()};
+    if(r.jump)runJump(l,x,r.jump);
+    save();
+  });
+}
+
 function stepOpen(l,x,k){if(isMentor())return true;const s=lessonSteps(l),i=s.indexOf(k);if(i<0)return false;
-  for(let j=0;j<i;j++){const p=s[j];if(!(x.v&&x.v[p]))return false;if(p==="task"&&!taskOK(l,x))return false}return true}
-function defaultStep(l,x){const s=lessonSteps(l);if(x.p)return s[0];for(const k of s){if(!(x.v&&x.v[k]))return stepOpen(l,x,k)?k:s[0];if(k==="task"&&!taskOK(l,x))return"task";if(k==="des"&&!x.dp&&l.d.length)return"des"}return"quiz"}
+  for(let j=0;j<i;j++){const p=s[j];if(!(x.v&&x.v[p])&&!(x.skip&&x.skip[p]))return false;if(p==="task"&&!taskOK(l,x)&&!(x.skip&&x.skip[p]))return false}return true}
+function defaultStep(l,x){const s=lessonSteps(l);if(x.p)return s[0];for(const k of s){if(!(x.v&&x.v[k])&&!(x.skip&&x.skip[k]))return stepOpen(l,x,k)?k:s[0];if(k==="task"&&!taskOK(l,x)&&!(x.skip&&x.skip.task))return"task";if(k==="des"&&!x.dp&&l.d.length&&!(x.skip&&x.skip.des))return"des"}return"quiz"}
 const secMastered=k=>secCnt(k)>0&&secDone(k)===secCnt(k);
 
 /* ----- быстрые правки наставника ----- */
-function lessonDoc(l){const o={};["ex","et","id","t","sc","kw","d","c","p","n","ok","a","notes","vids","lnk","auto","gal","lec","qz","photo","okPhoto","hidden","stt","sti","cap","vidsSet","lnkSet"].forEach(k=>{if(l[k]!==undefined)o[k]=clone(l[k])});o.upd=now();o.by=P.uid||"";return o}
+function lessonDoc(l){const o={};["ex","et","id","t","sc","kw","d","c","p","n","ok","a","notes","vids","lnk","auto","gal","lec","qz","trig","photo","okPhoto","hidden","stt","sti","cap","vidsSet","lnkSet"].forEach(k=>{if(l[k]!==undefined)o[k]=clone(l[k])});o.upd=now();o.by=P.uid||"";return o}
 async function quickSave(l,mut){const doc=lessonDoc(ALL.find(x=>x.id===l.id)||l);mut(doc);await P.db.doc("cms/main/lessons/"+l.id).set(doc)}
 function modal(title,fields,onSave,opt={}){
   const d=document.createElement("div");d.className="lb";
-  d.innerHTML=`<div class="mdl" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3 style="font-size:17px;margin-bottom:12px">${esc(title)}</h3><div class="form">${fields.map((f,i)=>`<label>${esc(f.label)}${f.type==="area"?`<textarea class="inp" rows="${f.rows||5}" data-mi="${i}" placeholder="${esc(f.ph||"")}">${esc(f.value||"")}</textarea>`:`<input class="inp" type="${f.type==="password"?"password":"text"}" data-mi="${i}" value="${esc(f.value||"")}" placeholder="${esc(f.ph||"")}" autocomplete="${f.type==="password"?"new-password":"off"}">`}</label>`).join("")}</div>
+  d.innerHTML=`<div class="mdl" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3 style="font-size:17px;margin-bottom:12px">${esc(title)}</h3><div class="form">${fields.map((f,i)=>`<label>${esc(f.label)}${f.type==="area"?`<textarea class="inp" rows="${f.rows||5}" data-mi="${i}" placeholder="${esc(f.ph||"")}">${esc(f.value||"")}</textarea>`:f.type==="select"?`<select class="inp" data-mi="${i}">${(f.options||[]).map(([v,lab])=>`<option value="${esc(v)}" ${String(f.value)===String(v)?"selected":""}>${esc(lab)}</option>`).join("")}</select>`:`<input class="inp" type="${f.type==="password"?"password":"text"}" data-mi="${i}" value="${esc(f.value||"")}" placeholder="${esc(f.ph||"")}" autocomplete="${f.type==="password"?"new-password":"off"}">`}</label>`).join("")}</div>
   <div class="row" style="margin-top:14px"><button class="btn pri" data-ms>Сохранить</button><button class="btn" data-mc>Отмена</button>${opt.del?`<button class="btn" data-md style="margin-left:auto">Удалить</button>`:""}</div><div class="sm" data-mm style="margin-top:8px;color:var(--bad)"></div></div>`;
   document.body.appendChild(d);const close=()=>d.remove();const msg=d.querySelector("[data-mm]");
   d.addEventListener("click",e=>{if(e.target===d)close()});d.querySelector("[data-mc]").onclick=close;
@@ -491,7 +572,7 @@ function lessonPage(id,stepK,sub){
 
 function bindLesson(l,k,sub){
   const x=lp(l.id);if(!x.o)x.o=now();const S=lessonSteps(l);if(!S.includes(k)||!stepOpen(l,x,k))k=defaultStep(l,x);
-  x.v=x.v||{};if(!x.v[k]){x.v[k]=now()}tryPass(l,x);save();
+  x.v=x.v||{};const wasVisited=!!x.v[k];if(!wasVisited){x.v[k]=now()}if(!wasVisited)evalTriggers(l,x,{step:k,event:"visited"});tryPass(l,x);save();
   app.querySelectorAll("img[data-z]").forEach(i=>i.onclick=()=>lightbox(i.src));
   app.querySelectorAll("[data-ehead]").forEach(b=>b.onclick=()=>editStepHead(l,b.dataset.ehead));
   if(k==="lec"&&isMentor())bindLecture(l);
@@ -509,7 +590,7 @@ function bindLesson(l,k,sub){
       if(taskOK(l,x)){const w=document.getElementById("nextwait");if(w){const a=document.createElement("a");a.className="btn dark";a.id="nextstep";a.href=w.dataset.href;a.textContent=w.dataset.t;w.replaceWith(a)}}};
     document.getElementById("chkbtn").onclick=e=>{if(e.target.disabled)return;const r=F.check(false);e.target.disabled=true;
       x.ef=Object.assign({},x.ef,{[ei]:[r.hit,r.tot,now()]});x.efa=Object.assign({},x.efa,{[ei]:((x.efa||{})[ei]||0)+1});x.f=[r.hit,r.tot,now()];x.fa=(x.fa||0)+1;st.tr.n++;st.tr.hit+=r.hit;st.tr.tot+=r.tot;res.classList.remove("hidden");
-      if(r.all){const s=exSt(x);x.fx=Object.assign({},s.fx);if(!x.fx[ei])x.fx[ei]=now();x.sx=Object.assign({},s.sx);if(taskDone(l,x)&&!x.fall)x.fall=now();tryPass(l,x);save();dirty=false;
+      if(r.all){const s=exSt(x);x.fx=Object.assign({},s.fx);if(!x.fx[ei])x.fx[ei]=now();x.sx=Object.assign({},s.sx);const newlyTaskDone=taskDone(l,x)&&!x.fall;if(newlyTaskDone)x.fall=now();if(newlyTaskDone)evalTriggers(l,x,{step:"task",event:"pass"});tryPass(l,x);save();dirty=false;
         res.innerHTML=`Отлично: найдены все дефекты (${r.tot})${r.extra?`, лишних отметок: ${r.extra}`:""}.${taskDone(l,x)?" Все упражнения шага выполнены.":""}`;showAns();return}
       res.innerHTML=`Найдено ${r.hit} из ${r.tot}${r.extra?`, лишних отметок: ${r.extra}`:""}. Найденные отмечены зелёным. Нажмите «Сбросить и попробовать снова» или «Показать ответы».`;gu.classList.remove("hidden");save();dirty=false};
     document.getElementById("rstbtn").onclick=()=>{F.reset();document.getElementById("chkbtn").disabled=false;res.classList.add("hidden");document.getElementById("anslist").classList.add("hidden")};
@@ -528,7 +609,7 @@ function bindLesson(l,k,sub){
     const check=()=>{const el=document.getElementById("dres");el.classList.remove("hidden");
       if(!(f.obj||"").trim()||!(f.ax||"").trim()){el.textContent="Заполните привязку: «Выберите проект» и «Ось» — без неё замечание в DES не принимается. Примеры указаны под полями.";el.style.color="var(--bad)";el.scrollIntoView({behavior:"smooth",block:"center"});return}
       const g=gradeDes(db2,T);x.da=(x.da||0)+1;el.style.color="";
-      if(g.all){if(!x.dp)x.dp=now();const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Лекция освоена!":""} Ниже — эталонный текст для DES.`}
+      if(g.all){const newlyDes=!x.dp;if(newlyDes)x.dp=now();if(newlyDes)evalTriggers(l,x,{step:"des",event:"pass"});const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Лекция освоена!":""} Ниже — эталонный текст для DES.`}
       else el.textContent=`Есть ошибки в полях: ${Object.keys(g.res).filter(z=>!g.res[z]).map(z=>({defs:"Комментарий",norms:"Норматив",whys:"Причина",acts:"Действия"})[z]).join(", ")}. Зелёным отмечены правильные варианты. Нажмите «Отмена», чтобы попробовать снова.`;
       save();dirty=false;document.getElementById("dsub").disabled=true;
       const ref=document.getElementById("desref");ref.classList.remove("hidden");const sel=l.d.map(()=>true);document.getElementById("despre").innerHTML=desText(l,f,sel);document.getElementById("copydes").onclick=e=>copyText(plain(desText(l,f,sel)),e.target);el.scrollIntoView({behavior:"smooth",block:"center"})};
@@ -542,9 +623,9 @@ function bindLesson(l,k,sub){
     mk()}
   const qz=document.getElementById("quiz");
   if(qz){let v=x.qv||0,qs;
-    const mk=()=>{qs=lessonQuiz(l,rng(l.id+":"+v));qz.innerHTML=qs.length?quizHTML(qs,"q"):`<p class="mut">Для теста нужно заполнить чек-лист, дефекты и нормативы лекции.</p>`;document.getElementById("qsub").disabled=!qs.length};
+    const mk=()=>{qs=lessonQuiz(l,rng(l.id+":"+v));qz.innerHTML=qs.length?quizHTML(qs,"q"):`<p class="mut">Для теста нужно заполнить чек-лист, дефекты и нормативы лекции.</p>`;if(qs.length)bindQuizExtras(qz,qs,"q");document.getElementById("qsub").disabled=!qs.length};
     mk();qz.addEventListener("change",()=>{dirty=true});
-    document.getElementById("qsub").onclick=()=>{const g=gradeQuiz(qz,qs,"q");const pc=pct(g.ok,qs.length);x.q=Math.max(x.q||0,pc);x.qd=now();x.qa=(x.qa||0)+1;const passed=tryPass(l,x);save();dirty=false;const el=document.getElementById("qres");el.classList.remove("hidden");const n=needs(l,x);
+    document.getElementById("qsub").onclick=()=>{const g=gradeQuiz(qz,qs,"q");const pc=pct(g.ok,qs.length);x.q=Math.max(x.q||0,pc);x.qd=now();x.qa=(x.qa||0)+1;evalTriggers(l,x,{step:"quiz",event:pc>=80?"pass":"fail"});const passed=tryPass(l,x);save();dirty=false;const el=document.getElementById("qres");el.classList.remove("hidden");const n=needs(l,x);
       el.innerHTML=`Результат: ${g.ok} из ${qs.length} (${pc}%). `+(x.p?(passed?"Лекция освоена! Следующая лекция открыта.":"Лекция уже освоена."):pc>=80?`Тест сдан. Для освоения лекции осталось: ${[!n.vis&&"пройти все шаги лекции",!n.find&&"найти все дефекты",!n.des&&"верно составить замечание DES"].filter(Boolean).join(", ")}.`:"Для зачёта нужно 80 %. Разберите ответы и пройдите новый вариант.");document.getElementById("qsub").disabled=true};
     document.getElementById("qnew").onclick=()=>{v++;x.qv=v;save();mk();document.getElementById("qres").classList.add("hidden")}}
 }
@@ -702,9 +783,13 @@ function showTaskPhoto(l,j){
 }
 
 /* ================= БЛИЦ-ТЕСТ: вопросы наставника ================= */
-function normQ(q){if(Array.isArray(q))return{q:q[0]||"",opts:q.slice(1).filter(v=>v!==undefined&&v!==null),ok:0};return{q:q.q||"",opts:(q.opts||[]).slice(),ok:+q.ok||0}}
-const validQ=q=>q.q.trim()&&q.opts.filter(o=>String(o).trim()).length>=2&&q.opts[q.ok]&&String(q.opts[q.ok]).trim();
-function customQs(l,r){return (l.qz||[]).map(normQ).filter(validQ).map(q=>{const items=q.opts.map((o,i)=>[String(o).trim(),i===q.ok]).filter(o=>o[0]);const sh=shuffle(items,r);return{q:q.q,opts:sh.map(o=>o[0]),ans:sh.findIndex(o=>o[1]),lid:l.id}})}
+function normQ(q){if(Array.isArray(q))return{q:q[0]||"",opts:q.slice(1).filter(v=>v!==undefined&&v!==null),ok:0};if(q.type&&q.type!=="single")return q;return{q:q.q||"",opts:(q.opts||[]).slice(),ok:+q.ok||0}}
+const validQ=q=>{if(q.type==="match")return validMatchQ(q);if(q.type==="order")return validOrderQ(q);if(q.type==="hotspot")return validHotspotQ(q);return q.q.trim()&&q.opts.filter(o=>String(o).trim()).length>=2&&q.opts[q.ok]&&String(q.opts[q.ok]).trim()};
+function customQs(l,r){return (l.qz||[]).map(normQ).filter(validQ).map(q=>{
+  if(q.type==="match")return buildMatchRuntime(q,l,r);
+  if(q.type==="order")return buildOrderRuntime(q,l,r);
+  if(q.type==="hotspot")return Object.assign({},q,{lid:l.id});
+  const items=q.opts.map((o,i)=>[String(o).trim(),i===q.ok]).filter(o=>o[0]);const sh=shuffle(items,r);return{q:q.q,opts:sh.map(o=>o[0]),ans:sh.findIndex(o=>o[1]),lid:l.id}})}
 const qAuto=l=>l.qauto===undefined?!(l.qz&&l.qz.length):!!l.qauto;
 function lessonQuiz(l,r){const c=shuffle(customQs(l,r),r).slice(0,15);let auto=[];if(!c.length||(qAuto(l)&&c.length<5))auto=["viol","why","norm","chk","act"].slice(0,Math.max(0,5-c.length)).map(t=>buildQ(l,t,r)).filter(Boolean);return shuffle([...c,...auto],r)}
 
@@ -809,7 +894,7 @@ function bindHome(){
 /* ================= НАСТАВНИК ================= */
 const DFN={crack:"Трещина",honey:"Раковины",rust:"Ржавчина",gap:"Щель / разрыв",wire:"Проволока",puddle:"Вода",bubble:"Вздутие",sag:"Провис",debris:"Мусор",tilt:"Наклон",foam:"Пена",holes:"Отверстия",cable:"Кабель",flap:"Отклейка",wave:"Неровность",hole:"Проходка",joint:"Толстый шов",stain:"Пятно",bar:"Стержень",spacing:"Шаг стержней",bulge:"Выпучивание",chip:"Скол",burn:"Прожог"};
 const SCN={form:"Опалубка стен",slab:"Опалубка перекрытия",mesh:"Сетка армирования",cage:"Каркас колонны",conc:"Бетонная поверхность",pour:"Бетонирование",cubes:"Образцы бетона",wp:"Гидроизоляция подземной части",wet:"Санузел",roof:"Кровля",mason:"Кладка",win:"Окно",nvf:"Вентфасад",fin:"Отделка стены",floor:"Пол",mep:"Инженерные системы"};
-let ED=null,JR=null,FLASH="";
+let ED=null,JR=null,FLASH="",EDQH=null,HQ_MARK=null;
 
 function mentorGate(){
   if(!P.dataReady)return `<div class="blk"><p>Подключение к базе практики…</p></div>`;
@@ -847,6 +932,10 @@ function mentorSettings(){
   <div class="form"><label>Специальности<textarea class="inp" rows="8" id="specsta">${esc(specsList().join("\n"))}</textarea></label>
   <label>Уровни ТН<textarea class="inp" rows="4" id="levelsta">${esc(levelsList().join("\n"))}</textarea></label></div>
   <button class="btn pri" id="specsave" style="margin-top:10px">Сохранить списки</button></div>
+  <div class="blk"><h2 style="font-size:17px">Переменные для триггеров</h2>
+  <p class="mut sm">По одной переменной на строке: <code>имя | тип | значение по умолчанию | подпись</code>. Тип — bool, num или str. Используются в триггерах лекций («Кабинет наставника → Лекция → Триггеры»).</p>
+  <textarea class="inp" rows="6" id="varsta" placeholder="path | str |  | Путь сценария">${esc((CFG.vars||[]).map(v=>`${v.name} | ${v.type} | ${v.default??""} | ${v.label||""}`).join("\n"))}</textarea>
+  <button class="btn pri" id="varsave" style="margin-top:10px">Сохранить переменные</button></div>
   <div class="blk"><h2 style="font-size:17px">Матрица допуска к аттестации</h2>
   <p class="mut sm">Отметьте, какие разделы банка аттестации может проходить каждая специальность. Абитуриенту без отмеченных разделов аттестация будет недоступна, пока наставник не загрузит вопросы и не отметит разделы здесь.</p>
   ${!Object.keys(EXAMBANK).length?`<p class="note">Сначала загрузите банк вопросов аттестации — разделы появятся здесь автоматически по названиям листов Excel.</p>`:`
@@ -936,11 +1025,59 @@ function bindExamBank(){
 }
 
 /* ----- редактор лекции ----- */
-const ETABS=[["main","Основное"],["lec","Конспект"],["defect","Найди дефект (упражнения)"],["links","Видео, ссылки, фото"],["check","Чек-лист"],["norms","Норматив РК"],["ok","Эталон «Посмотри»"],["des","Замечание DES"],["quiz","Блиц-тест"]];
+const ETABS=[["main","Основное"],["lec","Конспект"],["defect","Найди дефект (упражнения)"],["links","Видео, ссылки, фото"],["check","Чек-лист"],["norms","Норматив РК"],["ok","Эталон «Посмотри»"],["des","Замечание DES"],["quiz","Блиц-тест"],["trig","Триггеры"]];
+const TRIG_EVENTS=[
+  ...Object.keys(STEP_T).map(k=>[`${k}:visited`,`Абитуриент открыл шаг «${STEP_T[k]}»`]),
+  ["task:pass","Нашёл все дефекты (прошёл «Найди дефект»)"],
+  ["quiz:pass","Сдал блиц-тест (≥80%)"],
+  ["quiz:fail","Не сдал блиц-тест (<80%)"],
+  ["des:pass","Верно составил замечание DES"],
+  ["lessonPass","Лекция полностью освоена"]
+];
+const TRIG_OPS=[["eq","равно"],["neq","не равно"],["gt","больше"],["gte","больше или равно"],["lt","меньше"],["lte","меньше или равно"]];
+function trigEventLabel(on){if(!on)return"?";const key=on.step?`${on.step}:${on.event}`:on.event;const f=TRIG_EVENTS.find(([v])=>v===key);return f?f[1]:key}
+function trigRowText(r){
+  let s=`Когда: ${trigEventLabel(r.on)}`;
+  if(r.when&&r.when.length)s+=r.when.map(c=>{const d=varDecl(c.var);const op=(TRIG_OPS.find(([v])=>v===c.op)||[,c.op])[1];return ` и переменная «${d?d.label||d.name:c.var}» ${op} «${c.val}»`}).join("");
+  const effects=[];
+  if(r.setVar)effects.push(`переменная «${(varDecl(r.setVar.name)||{label:r.setVar.name}).label||r.setVar.name}» = «${r.setVar.value}»`);
+  if(r.jump)effects.push(r.jump.kind==="lesson"?`переход к лекции ${esc(r.jump.target)}`:`переход к шагу «${(STEP_T[r.jump.target]||r.jump.target)}» этой лекции`);
+  if(effects.length)s+=` → ${effects.join("; ")}`;
+  if(r.once===false)s+=" (срабатывает каждый раз)";
+  return s;
+}
+function trigModal(i){
+  const isNew=i==null;const r=isNew?{}:ED.trig[i];
+  const varOpts=[["","— нет —"],...(CFG.vars||[]).map(v=>[v.name,v.label||v.name])];
+  modal(isNew?"Новый триггер":"Изменить триггер",[
+    {label:"Название (для вашего удобства)",value:r.name||""},
+    {label:"Когда",type:"select",options:TRIG_EVENTS,value:r.on?(r.on.step?`${r.on.step}:${r.on.event}`:r.on.event):""},
+    {label:"Доп. условие — переменная",type:"select",options:varOpts,value:(r.when&&r.when[0]&&r.when[0].var)||""},
+    {label:"Доп. условие — оператор",type:"select",options:TRIG_OPS,value:(r.when&&r.when[0]&&r.when[0].op)||"eq"},
+    {label:"Доп. условие — значение",value:(r.when&&r.when[0]&&r.when[0].val)||""},
+    {label:"Установить переменную",type:"select",options:varOpts,value:(r.setVar&&r.setVar.name)||""},
+    {label:"Новое значение переменной",value:(r.setVar&&r.setVar.value)||""},
+    {label:"Переход",type:"select",options:[["","— нет —"],["step","На шаг этой лекции"],["lesson","На другую лекцию"]],value:r.jump?r.jump.kind:""},
+    {label:"Куда (ключ шага этой лекции, например quiz — или ID лекции, например B2)",value:(r.jump&&r.jump.target)||""},
+    {label:"Повторение",type:"select",options:[["once","Один раз"],["repeat","Каждый раз, когда условие выполняется"]],value:r.once===false?"repeat":"once"}
+  ],async v=>{
+    const[name,evKey,wVar,wOp,wVal,setName,setVal,jumpKind,jumpTarget,rep]=v;
+    if(!evKey){uiAlert("Выберите, когда срабатывает триггер.");return false}
+    const[a,b]=evKey.includes(":")?evKey.split(":"):[null,evKey];
+    const on=a?{step:a,event:b}:{event:b};
+    if(jumpKind==="step"&&!lessonSteps(ED).includes(jumpTarget.trim())){uiAlert("Для перехода на шаг укажите один из ключей шагов этой лекции: "+lessonSteps(ED).join(", "));return false}
+    if(jumpKind==="lesson"&&!ALL.some(x=>x.id===jumpTarget.trim())){uiAlert("Лекция с таким ID не найдена: "+jumpTarget);return false}
+    const rule={id:r.id||("t_"+Math.random().toString(36).slice(2,10)),name:name.trim(),on,once:rep!=="repeat"};
+    if(wVar)rule.when=[{var:wVar,op:wOp,val:wVal}];
+    if(setName)rule.setVar={name:setName,value:setVal};
+    if(jumpKind)rule.jump={kind:jumpKind,target:jumpTarget.trim()};
+    ED.trig=ED.trig||[];if(isNew)ED.trig.push(rule);else ED.trig[i]=rule;mark();render();
+  },isNew?{}:{del:async()=>{ED.trig.splice(i,1);mark();render()}});
+}
 function edStart(id,sec){
   if(id){const l=ALL.find(x=>x.id===id);if(!l)return false;ED=clone(l)}
   else{const nums=ALL.filter(x=>x.s===sec).map(x=>parseInt(x.id.replace(/^\D+/,""))||0);ED={id:sec+(Math.max(0,...nums)+1),s:sec,t:"",sc:"conc",kw:"",d:[],c:[],p:"",n:[],ok:[],a:"",notes:"",vids:[],gal:[],photo:null,okPhoto:null,hidden:false,isNew:true}}
-  ["vids","gal","lnk","lec","qz"].forEach(k=>{ED[k]=ED[k]||[]});ED.ex=ED.ex||[];ED.exi=typeof PENDING_EXI==="number"?Math.min(PENDING_EXI,ED.ex.length):0;PENDING_EXI=null;ED.qz=(ED.qz||[]).map(normQ);ED.desex=Object.assign({},ED.desex||{});if(ED.qauto===undefined)ED.qauto=!ED.qz.length;ED.lec=ED.lec.map(b=>b.t==="img"||b.t==="row"?{t:b.t,imgs:imgsOf(b)}:b);ED.notes=ED.notes||"";if(ED.auto===undefined)ED.auto=true;ED.dtype=ED.dtype||"stain";ED._ch=false;return true;
+  ["vids","gal","lnk","lec","qz","trig"].forEach(k=>{ED[k]=ED[k]||[]});ED.ex=ED.ex||[];ED.exi=typeof PENDING_EXI==="number"?Math.min(PENDING_EXI,ED.ex.length):0;PENDING_EXI=null;ED.qz=(ED.qz||[]).map(normQ);ED.desex=Object.assign({},ED.desex||{});if(ED.qauto===undefined)ED.qauto=!ED.qz.length;ED.lec=ED.lec.map(b=>b.t==="img"||b.t==="row"?{t:b.t,imgs:imgsOf(b)}:b);ED.notes=ED.notes||"";if(ED.auto===undefined)ED.auto=true;ED.dtype=ED.dtype||"stain";ED._ch=false;return true;
 }
 const lines=a=>a.join("\n");
 const normToLine=n=>[nm(n[0])[0],n[1],n[2]].join(" | ");
@@ -1000,13 +1137,21 @@ function editorPage(tab){
      <button class="btn sm" data-dqoff style="margin-top:10px">Вернуть автоматические варианты</button>`
    :`<p class="mut sm">Сейчас варианты создаются автоматически из дефектов, нормативов и действий лекции (плюс ложные варианты из других лекций).</p><button class="btn edit" data-dqon>✎ Заполнить и редактировать вручную</button>`}
    <p class="mut sm" style="margin-top:14px">Предпросмотр эталонного замечания:</p><div class="des-pre" id="edes">${desText(l,{},l.d.map(()=>true))}</div>`;
-  t.quiz=`<p class="mut sm">Напишите вопросы и варианты ответов, отметьте правильный кружком. При прохождении программа сравнит ответ абитуриента с отмеченным вами — засчитывается только правильный.</p>
+  t.quiz=EDQH!==null?hotspotEditorHTML():`<p class="mut sm">Четыре типа вопросов: одиночный выбор, сопоставление, упорядочивание и клик по схеме. Засчитывается только полностью верный ответ (для клика — попадание в отмеченную зону).</p>
    <label class="row" style="margin:6px 0 12px"><input type="checkbox" data-b="qauto" ${ED.qauto?"checked":""}> Дополнять тест автоматическими вопросами, если моих вопросов меньше 5</label>
-   <div id="qzlist">${ED.qz.map((q,i)=>`<div class="lecb"><div class="row" style="justify-content:space-between"><b>Вопрос ${i+1}</b><button class="btn sm" data-qdel="${i}">Удалить вопрос</button></div>
+   <div id="qzlist">${ED.qz.map((q,i)=>{
+     if(q.type==="match")return `<div class="lecb"><div class="row" style="justify-content:space-between"><b>Вопрос ${i+1} · Сопоставление</b><span class="row"><button class="btn sm" data-qedit="${i}">✎ Изменить</button><button class="btn sm" data-qdel="${i}">Удалить</button></span></div><p class="mut sm">${esc(q.q)}</p><p class="mut sm">${(q.pairs||[]).length} пар</p></div>`;
+     if(q.type==="order")return `<div class="lecb"><div class="row" style="justify-content:space-between"><b>Вопрос ${i+1} · Упорядочивание</b><span class="row"><button class="btn sm" data-qedit="${i}">✎ Изменить</button><button class="btn sm" data-qdel="${i}">Удалить</button></span></div><p class="mut sm">${esc(q.q)}</p><p class="mut sm">${(q.steps||[]).length} шагов</p></div>`;
+     if(q.type==="hotspot")return `<div class="lecb"><div class="row" style="justify-content:space-between"><b>Вопрос ${i+1} · Клик по схеме</b><span class="row"><button class="btn sm" data-qedit="${i}">✎ Изменить</button><button class="btn sm" data-qdel="${i}">Удалить</button></span></div><p class="mut sm">${esc(q.q)}</p><p class="mut sm">${q.d&&q.d.length?"отметка задана":"отметка не задана"}</p></div>`;
+     return `<div class="lecb"><div class="row" style="justify-content:space-between"><b>Вопрос ${i+1} · Одиночный выбор</b><button class="btn sm" data-qdel="${i}">Удалить вопрос</button></div>
      <textarea class="inp" rows="2" data-qq="${i}" placeholder="Текст вопроса">${esc(q.q)}</textarea>
-     ${q.opts.map((o,j)=>`<div class="row qopt"><label class="row sm" style="gap:4px"><input type="radio" name="qok_${i}" data-qok="${i}:${j}" ${q.ok===j?"checked":""}> правильный</label><input class="inp" style="flex:1" data-qo="${i}:${j}" value="${esc(o)}" placeholder="Вариант ответа ${j+1}">${q.opts.length>2?`<button class="btn sm" data-qodel="${i}:${j}" aria-label="Удалить вариант">✕</button>`:""}</div>`).join("")}
-     <button class="btn sm" data-qoadd="${i}">＋ Вариант ответа</button></div>`).join("")||`<p class="mut">Своих вопросов пока нет — тест создаётся автоматически.</p>`}</div>
-   <button class="btn edit" id="qzadd" style="margin-top:10px">＋ Добавить вопрос</button>`;
+     ${(q.opts||[]).map((o,j)=>`<div class="row qopt"><label class="row sm" style="gap:4px"><input type="radio" name="qok_${i}" data-qok="${i}:${j}" ${q.ok===j?"checked":""}> правильный</label><input class="inp" style="flex:1" data-qo="${i}:${j}" value="${esc(o)}" placeholder="Вариант ответа ${j+1}">${q.opts.length>2?`<button class="btn sm" data-qodel="${i}:${j}" aria-label="Удалить вариант">✕</button>`:""}</div>`).join("")}
+     <button class="btn sm" data-qoadd="${i}">＋ Вариант ответа</button></div>`;
+   }).join("")||`<p class="mut">Своих вопросов пока нет — тест создаётся автоматически.</p>`}</div>
+   <div class="row" style="margin-top:10px"><button class="btn edit" id="qzadd">＋ Одиночный выбор</button><button class="btn edit" id="qzaddmatch">＋ Сопоставление</button><button class="btn edit" id="qzaddorder">＋ Упорядочивание</button><button class="btn edit" id="qzaddhotspot">＋ Клик по схеме</button></div>`;
+  t.trig=`<p class="mut sm">Условная логика: когда у абитуриента происходит событие (сдал тест, открыл шаг и т.п.), можно изменить переменную и/или перенаправить на другой шаг этой лекции или на другую лекцию. Список переменных редактируется в «Кабинет наставника → Настройки практики».</p>
+   <div id="trlist">${(ED.trig||[]).map((r,i)=>`<div class="lecb"><div class="row" style="justify-content:space-between"><b>${esc(r.name||"Без названия")}</b><span class="row"><button class="btn sm" data-tredit="${i}">✎ Изменить</button><button class="btn sm" data-trdel="${i}">Удалить</button></span></div><p class="mut sm">${esc(trigRowText(r))}</p></div>`).join("")||`<p class="mut">Триггеров пока нет.</p>`}</div>
+   <button class="btn edit" id="tradd" style="margin-top:10px">＋ Добавить триггер</button>`;
   return `<div class="crumbs"><a href="#/mentor">Кабинет наставника</a> / ${l.isNew?"Новая лекция":"Редактирование"} ${l.id}</div>
   <h1 style="font-size:clamp(22px,3.5vw,30px);margin-bottom:12px">${l.isNew?"Новая лекция":"Лекция"} ${l.id}${l.t?": "+esc(l.t):""}</h1>
   ${up?"":`<p class="note">Загрузка фото доступна только наставникам (роль mentor/owner).</p>`}
@@ -1037,8 +1182,76 @@ async function uploadImg(f){
   catch(e){const t={too_large:"Файл слишком большой.",unsupported_type:"Этот формат не поддерживается.",quota_or_state:"Хранилище фото заполнено — удалите ненужные фото.",rate_limited:"Слишком много загрузок подряд — подождите минуту."}[e&&e.code]||"Фото не загрузилось. Попробуйте ещё раз.";if(m){m.classList.remove("hidden");m.textContent=t}else uiAlert(t);return null}
 }
 function rescale(oldG,newG){TG().d.forEach(d=>{d[1]=Math.round(d[1]*newG.W/oldG.W);d[2]=Math.round(d[2]*newG.H/oldG.H);if(d[5])d[5]=Math.round(d[5]*newG.k/oldG.k)})}
+
+/* ----- авторинг вопросов «сопоставление» и «упорядочивание» (modal) ----- */
+function matchQModal(i){
+  const isNew=i==null;const q=isNew?{}:ED.qz[i];
+  modal(isNew?"Новый вопрос — сопоставление":"Вопрос — сопоставление",[
+    {label:"Текст вопроса",value:q.q||""},
+    {label:"Пары «термин | определение» — по одной паре на строке",type:"area",rows:8,value:(q.pairs||[]).map(p=>`${p[0]} | ${p[1]}`).join("\n")}
+  ],async v=>{
+    const qtext=v[0].trim();if(!qtext){uiAlert("Введите текст вопроса.");return false}
+    const pairs=v[1].split("\n").map(s=>s.split("|").map(x=>x.trim())).filter(p=>p[0]&&p[1]);
+    if(pairs.length<2){uiAlert("Нужно минимум 2 заполненные пары «термин | определение».");return false}
+    ED.qz=ED.qz||[];const rule={type:"match",q:qtext,pairs};if(isNew)ED.qz.push(rule);else ED.qz[i]=rule;mark();render();
+  },isNew?{}:{del:async()=>{ED.qz.splice(i,1);mark();render()}});
+}
+function orderQModal(i){
+  const isNew=i==null;const q=isNew?{}:ED.qz[i];
+  modal(isNew?"Новый вопрос — упорядочивание":"Вопрос — упорядочивание",[
+    {label:"Текст вопроса",value:q.q||""},
+    {label:"Шаги по одному на строку, в ПРАВИЛЬНОМ порядке",type:"area",rows:8,value:(q.steps||[]).join("\n")}
+  ],async v=>{
+    const qtext=v[0].trim();if(!qtext){uiAlert("Введите текст вопроса.");return false}
+    const steps=v[1].split("\n").map(s=>s.trim()).filter(Boolean);
+    if(steps.length<3){uiAlert("Нужно минимум 3 заполненных шага.");return false}
+    ED.qz=ED.qz||[];const rule={type:"order",q:qtext,steps};if(isNew)ED.qz.push(rule);else ED.qz[i]=rule;mark();render();
+  },isNew?{}:{del:async()=>{ED.qz.splice(i,1);mark();render()}});
+}
+
+/* ----- авторинг вопроса «клик по схеме» (hotspot) — инлайн, одна метка ----- */
+function hqObj(){
+  const sel=document.getElementById("hqsc"),tsel=document.getElementById("hqtype");
+  const sc=sel?sel.value:(EDQH>=0&&ED.qz[EDQH]?ED.qz[EDQH].sc:"conc")||"conc";
+  const type=tsel?tsel.value:(HQ_MARK&&HQ_MARK.type)||"stain";
+  return{sc,photo:null,d:HQ_MARK?[[type,HQ_MARK.x,HQ_MARK.y,"",""]]:[]};
+}
+function hotspotEditorHTML(){
+  const isNew=EDQH===-1;const q=!isNew&&ED.qz[EDQH]?ED.qz[EDQH]:null;
+  if(HQ_MARK===null&&q&&q.d&&q.d[0])HQ_MARK={x:q.d[0][1],y:q.d[0][2],type:q.d[0][0]};
+  return `<div class="blk"><h3 style="font-size:15px;margin-bottom:8px">${isNew?"Новый вопрос — клик по схеме":"Вопрос — клик по схеме"}</h3>
+  <label class="form">Текст вопроса<textarea class="inp" rows="2" id="hqtext">${esc((q&&q.q)||"")}</textarea></label>
+  <div class="row" style="margin:8px 0"><label>Схема <select class="inp" id="hqsc">${Object.keys(SCN).map(k=>`<option value="${k}" ${((q&&q.sc)||"conc")===k?"selected":""}>${SCN[k]}</option>`).join("")}</select></label>
+  <label>Вид отметки <select class="inp" id="hqtype">${Object.keys(DFN).map(k=>`<option value="${k}" ${((HQ_MARK&&HQ_MARK.type)||"stain")===k?"selected":""}>${DFN[k]}</option>`).join("")}</select></label></div>
+  <p class="mut sm">Щёлкните по схеме, где должна быть отметка нарушения — повторный щелчок переставит её.</p>
+  <div id="hqcanvas"></div>
+  <div class="row" style="margin-top:10px"><button class="btn pri" id="hqsave">Сохранить вопрос</button><button class="btn" id="hqcancel">Отмена</button></div></div>`;
+}
+function hqCanvasDraw(){
+  const box=document.getElementById("hqcanvas");if(!box)return;
+  box.innerHTML=svgOf(hqObj(),"task","hqsvg");
+  const svg=document.getElementById("hqsvg");
+  svg.addEventListener("click",e=>{const p=svgPt(svg,e);const tsel=document.getElementById("hqtype");HQ_MARK={x:Math.round(p.x),y:Math.round(p.y),type:tsel?tsel.value:"stain"};hqCanvasDraw()});
+}
+function bindHotspotEditor(){
+  hqCanvasDraw();
+  const sc=document.getElementById("hqsc");if(sc)sc.onchange=hqCanvasDraw;
+  const ty=document.getElementById("hqtype");if(ty)ty.onchange=hqCanvasDraw;
+  document.getElementById("hqcancel").onclick=()=>{EDQH=null;HQ_MARK=null;render()};
+  document.getElementById("hqsave").onclick=()=>{
+    const qtext=document.getElementById("hqtext").value.trim();
+    if(!qtext){uiAlert("Введите текст вопроса.");return}
+    if(!HQ_MARK){uiAlert("Щёлкните по схеме, чтобы поставить отметку.");return}
+    const sc=document.getElementById("hqsc").value;
+    const rule={type:"hotspot",q:qtext,sc,photo:null,d:[[HQ_MARK.type,HQ_MARK.x,HQ_MARK.y,"",""]]};
+    ED.qz=ED.qz||[];if(EDQH===-1)ED.qz.push(rule);else ED.qz[EDQH]=rule;
+    EDQH=null;HQ_MARK=null;mark();render();
+  };
+}
+
 function bindEditor(tab){
   if(tab==="defect")edCanvas();
+  if(tab==="quiz"&&EDQH!==null)bindHotspotEditor();
   const on=(sel,ev,fn)=>app.querySelectorAll(sel).forEach(el=>el.addEventListener(ev,fn));
   on("[data-e]","input",e=>{ED[e.target.dataset.e]=e.target.value;mark();const p=document.getElementById("edes");if(p)p.innerHTML=desText(ED,{},ED.d.map(()=>true))});
   on("[data-b]","change",e=>{ED[e.target.dataset.b]=e.target.checked;mark()});
@@ -1091,6 +1304,14 @@ function bindEditor(tab){
   on("[data-qodel]","click",e=>{const [i,j]=e.target.dataset.qodel.split(":").map(Number);const q=ED.qz[i];q.opts.splice(j,1);if(q.ok===j)q.ok=0;else if(q.ok>j)q.ok--;mark();render()});
   on("[data-qoadd]","click",e=>{ED.qz[+e.target.dataset.qoadd].opts.push("");mark();render()});
   on("[data-qdel]","click",async e=>{const i=+e.target.dataset.qdel;if(!await uiConfirm(`Удалить вопрос ${i+1}?`))return;ED.qz.splice(i,1);mark();render()});
+  const qam=document.getElementById("qzaddmatch");if(qam)qam.onclick=()=>matchQModal(null);
+  const qao=document.getElementById("qzaddorder");if(qao)qao.onclick=()=>orderQModal(null);
+  const qah=document.getElementById("qzaddhotspot");if(qah)qah.onclick=()=>{EDQH=-1;HQ_MARK=null;render()};
+  on("[data-qedit]","click",e=>{const i=+e.target.dataset.qedit,q=ED.qz[i];if(q.type==="match")matchQModal(i);else if(q.type==="order")orderQModal(i);else if(q.type==="hotspot"){EDQH=i;HQ_MARK=null;render()}});
+  // триггеры
+  const tradd=document.getElementById("tradd");if(tradd)tradd.onclick=()=>trigModal(null);
+  on("[data-tredit]","click",e=>trigModal(+e.target.dataset.tredit));
+  on("[data-trdel]","click",async e=>{const i=+e.target.dataset.trdel;if(!await uiConfirm("Удалить триггер?"))return;ED.trig.splice(i,1);mark();render()});
   document.getElementById("edsave").onclick=edSave;
   const rv=document.getElementById("edrev");if(rv)rv.onclick=async()=>{if(!await uiConfirm("Удалить все изменения наставника и вернуть исходную версию лекции?"))return;try{await P.db.doc("cms/main/lessons/"+ED.id).delete();ED=null;FLASH="Лекция возвращена к базовой версии.";location.hash="#/mentor"}catch(e){uiAlert("Не удалось: нет прав на запись.")}};
 }
@@ -1099,10 +1320,11 @@ async function edSave(){
   if(!ED.t.trim()){uiAlert("Введите название лекции (вкладка «Основное»).");return}
   const exs=[ED.d,...ED.ex.map(e=>e.d)];for(let q=0;q<exs.length;q++){const bad=exs[q].findIndex(d=>!d[3].trim());if(bad>=0){uiAlert(`Упражнение ${q+1}: заполните название дефекта № ${bad+1} (вкладка «Найди дефект»).`);ED.exi=q;return}}
   const badL=[...(ED.vidsSet?ED.vids:[]),...(ED.lnkSet?ED.lnk:[])].find(v=>v[1]&&!/^https?:\/\//.test(v[1]));if(badL){uiAlert(`Ссылка должна начинаться с http:// или https:// — проверьте: ${badL[1]}`);return}
-  const badQ=ED.qz.findIndex(q=>(q.q.trim()||q.opts.some(o=>String(o).trim()))&&!validQ(q));if(badQ>=0){uiAlert(`Вопрос ${badQ+1}: нужен текст вопроса, минимум два варианта ответа и отмеченный правильный вариант.`);return}
+  const badQ=ED.qz.findIndex(q=>{const touched=q.type&&q.type!=="single"?!!(q.q&&String(q.q).trim()):!!((q.q&&q.q.trim())||(q.opts&&q.opts.some(o=>String(o).trim())));return touched&&!validQ(q)});
+  if(badQ>=0){const bq=ED.qz[badQ];const msgs={match:"нужен текст вопроса и минимум 2 заполненные пары «термин | определение»",order:"нужен текст вопроса и минимум 3 заполненных шага"};uiAlert(`Вопрос ${badQ+1}: ${msgs[bq.type]||"нужен текст вопроса, минимум два варианта ответа и отмеченный правильный вариант"}.`);return}
   if(ED.desq){const g=DES_G.find(([g])=>!(ED.desq[g]||[]).some(o=>o[1]&&String(o[0]).trim()));if(g){uiAlert(`В замечании DES, поле «${g[1].split(":")[0]}»: отметьте хотя бы один верный вариант.`);return}}
   ED.n=ED.n.filter(n=>String(n[0]).trim());
-  const out={ex:ED.ex.map(e=>({t:e.t||"",sc:e.sc||"conc",d:e.d||[],photo:e.photo||null})),et:ED.et||"",id:ED.id,t:ED.t.trim(),sc:ED.sc||"conc",kw:ED.kw||ED.t,d:ED.d,c:ED.c,p:ED.p,n:ED.n,ok:ED.ok,a:ED.a,notes:ED.notes,vids:ED.vids.filter(validLink),lnk:ED.lnk.filter(validLink),auto:ED.auto!==false,vidsSet:!!ED.vidsSet,lnkSet:!!ED.lnkSet,stt:ED.stt||{},sti:ED.sti||{},cap:ED.cap||"",gal:ED.gal,lec:ED.lec,qz:ED.qz.map(normQ).filter(validQ),qauto:!!ED.qauto,desq:ED.desq?Object.fromEntries(DES_G.map(([g])=>[g,(ED.desq[g]||[]).filter(o=>String(o[0]).trim())])):null,desex:ED.desex||{},photo:ED.photo||null,okPhoto:ED.okPhoto||null,hidden:!!ED.hidden,upd:now(),by:P.uid||""};
+  const out={ex:ED.ex.map(e=>({t:e.t||"",sc:e.sc||"conc",d:e.d||[],photo:e.photo||null})),et:ED.et||"",id:ED.id,t:ED.t.trim(),sc:ED.sc||"conc",kw:ED.kw||ED.t,d:ED.d,c:ED.c,p:ED.p,n:ED.n,ok:ED.ok,a:ED.a,notes:ED.notes,vids:ED.vids.filter(validLink),lnk:ED.lnk.filter(validLink),auto:ED.auto!==false,vidsSet:!!ED.vidsSet,lnkSet:!!ED.lnkSet,stt:ED.stt||{},sti:ED.sti||{},cap:ED.cap||"",gal:ED.gal,lec:ED.lec,qz:ED.qz.map(normQ).filter(validQ),qauto:!!ED.qauto,trig:(ED.trig||[]).filter(r=>r&&r.on),desq:ED.desq?Object.fromEntries(DES_G.map(([g])=>[g,(ED.desq[g]||[]).filter(o=>String(o[0]).trim())])):null,desex:ED.desex||{},photo:ED.photo||null,okPhoto:ED.okPhoto||null,hidden:!!ED.hidden,upd:now(),by:P.uid||""};
   msg.textContent="Сохраняю…";
   try{await P.db.doc("cms/main/lessons/"+ED.id).set(clone(out));FLASH="Лекция сохранена "+new Date().toLocaleTimeString("ru-RU")+" — изменения уже видны абитуриентам.";ED._ch=false;dirty=false;ED.isNew=false;ED.edited=true;msg.textContent=FLASH}
   catch(e){msg.textContent=e&&e.code==="quota_exceeded"?"База заполнена — удалите ненужные лекции.":"Не сохранено: нет прав на запись (нужна роль «Наставник»)."}
@@ -1169,6 +1391,8 @@ async function deleteTrainee(uid,fio){
 function traineePage(uid){
   if(!JR||JR.loading){if(!JR)loadJournal();return `<p>Загрузка…</p>`}
   const r=JR.rows.find(x=>x.uid===uid);if(!r)return notFound();const lp2=r.lp||{},s=tStats(r);
+  const varsEntries=Object.entries(r.vars||{});
+  const firedRows=[];LS.forEach(l=>{const x=lp2[l.id];if(x&&x.trigFired)Object.entries(x.trigFired).forEach(([tid,info])=>firedRows.push({lesson:l,name:(info&&info.name)||tid,at:info&&info.at}))});
   return `<div class="crumbs no-print"><a href="#/mentor/journal">Журнал абитуриентов</a> / ${esc(r.prof.fio)}</div>
   <div class="blk"><h1 style="font-size:clamp(22px,3.5vw,30px)">${esc(r.prof.fio)}</h1><p class="mut">${esc(r.prof.spec||"")} · ${esc(r.prof.lvl||"")}${r.prof.obj?" · "+esc(r.prof.obj):""} · лекции с ${fd(r.prof.reg)}</p>
   <div class="stat"><div><b>${s.done}/${LS.length}</b>лекций пройдено</div><div><b>${s.avg!=null?s.avg+"%":"—"}</b>средний балл тестов</div><div><b>${s.fp!=null?s.fp+"%":"—"}</b>дефектов найдено</div><div><b>${(r.ex||[]).length}</b>аттестаций</div></div>
@@ -1180,6 +1404,9 @@ function traineePage(uid){
   <p class="mut sm">После каждой аттестации повторное прохождение заблокировано, пока вы не назначите дату пересдачи.</p>
   <div class="row no-print"><label>Дата пересдачи<input type="date" class="inp" id="retakedate" value="${esc(retakeOf(uid))}"></label><button class="btn pri" id="retakesave" data-u="${esc(uid)}">Назначить</button><span class="sm" id="retakemsg">${retakeOf(uid)?"Назначено: "+fdd(retakeOf(uid)):"Не назначено — повторный допуск закрыт"}</span></div>
   <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=passPct()?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
+  ${firedRows.length||varsEntries.length?`<div class="blk"><h2 style="font-size:16px">Триггеры и переменные</h2>
+  ${varsEntries.length?`<p class="mut sm">Переменные: ${varsEntries.map(([k,v])=>`«${esc((varDecl(k)||{label:k}).label||k)}» = ${esc(String(v))}`).join(", ")}</p>`:""}
+  ${firedRows.length?`<div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Триггер</th><th>Когда сработал</th></tr>${firedRows.map(fr=>`<tr><td>${fr.lesson.id}. ${esc(fr.lesson.t)}</td><td>${esc(fr.name)}</td><td>${fd(fr.at)}</td></tr>`).join("")}</table></div>`:`<p class="mut sm">Пока ни один триггер не сработал.</p>`}</div>`:""}
   ${SEC.map(sc=>`<div class="blk"><h2 style="font-size:16px">${sc[0]}. ${esc(sc[1])}${LS.filter(l=>l.s===sc[0]).every(l=>lp2[l.id]&&lp2[l.id].p)?" · раздел освоен ✓":""}</h2><div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Начат</th><th>Шаги</th><th>Найди дефект</th><th>DES</th><th>Тест (попыток)</th><th>Освоен</th></tr>${LS.filter(l=>l.s===sc[0]).map(l=>{const x=lp2[l.id]||{};return `<tr><td>${l.id}. ${esc(l.t)}</td><td>${fd(x.o)}</td><td>${lessonSteps(l).filter(s=>x.v&&x.v[s]).length}/${lessonSteps(l).length}</td><td>${x.fall?"✓ "+fdd(x.fall):x.f?`${x.f[0]}/${x.f[1]}`:"—"}${x.seen&&!x.fall?" · смотрел ответы":""}</td><td>${x.dp?"✓ "+fdd(x.dp):x.da?`ошибки (${x.da})`:"—"}</td><td>${x.q!=null?`${x.q}% (${x.qa||1})`:"—"}</td><td>${x.p?fd(x.p):"—"}</td></tr>`}).join("")}</table></div></div>`).join("")}`;
 }
 async function journalCsv(btn){
@@ -1255,6 +1482,13 @@ function bindPage(p,a,b,c){
         const levels=document.getElementById("levelsta").value.split("\n").map(x=>x.trim()).filter(Boolean);
         try{await P.db.doc("cms/main").set(Object.assign({},CFG,{specialties,levels}));FLASH="Списки сохранены."}catch(e){uiAlert("Нет прав на запись.")}
       };
+      const vsave=document.getElementById("varsave");if(vsave)vsave.onclick=async()=>{
+        const vars=document.getElementById("varsta").value.split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{
+          const [name,type,def,label]=line.split("|").map(s=>(s||"").trim());
+          return{name,type:["bool","num","str"].includes(type)?type:"str",default:type==="num"?(+def||0):type==="bool"?def==="true":(def||""),label:label||name};
+        }).filter(v=>v.name);
+        try{await P.db.doc("cms/main").set(Object.assign({},CFG,{vars}));FLASH="Переменные сохранены."}catch(e){uiAlert("Нет прав на запись.")}
+      };
       app.querySelectorAll(".smx").forEach(cb=>cb.onchange=async()=>{
         const spec=cb.dataset.s,cat=cb.dataset.c,m=Object.assign({},specMatrix());
         const cur=new Set(m[spec]||[]);if(cb.checked)cur.add(cat);else cur.delete(cat);m[spec]=[...cur];
@@ -1297,7 +1531,7 @@ function bindPage(p,a,b,c){
   if(p==="exam"){
     const g=document.getElementById("exgo");if(g)g.onclick=examStart;
     const e=document.getElementById("exend");if(e)e.onclick=async()=>{const left=EX.qs.length-document.querySelectorAll("#exq input:checked").length;if(left&&!await uiConfirm(`Без ответа осталось вопросов: ${left}. Завершить?`))return;examFinish()};
-    if(EX&&EX.stage==="run"){dirty=true;const tick=()=>{const s=Math.max(0,Math.round((EX.end-Date.now())/1000));const el=document.getElementById("timer");if(el)el.textContent=`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;if(s<=0)examFinish()};clearInterval(EX.t);EX.t=setInterval(tick,1000);tick()}
+    if(EX&&EX.stage==="run"){dirty=true;const exq=document.getElementById("exq");if(exq)bindQuizExtras(exq,EX.qs,"e");const tick=()=>{const s=Math.max(0,Math.round((EX.end-Date.now())/1000));const el=document.getElementById("timer");if(el)el.textContent=`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;if(s<=0)examFinish()};clearInterval(EX.t);EX.t=setInterval(tick,1000);tick()}
     const pr=document.getElementById("exprint");if(pr)pr.onclick=()=>window.print();
     const ag=document.getElementById("exagain");if(ag)ag.onclick=()=>{EX=null;render()};
   }
