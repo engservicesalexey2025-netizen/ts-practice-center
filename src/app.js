@@ -290,10 +290,18 @@ function videoPage(){
 function normsPage(){
   const use={};LS.forEach(l=>l.n.forEach(n=>{(use[n[0]]=use[n[0]]||new Set()).add(l.id)}));
   const keys=[...new Set([...Object.keys(N),...Object.keys(use)])];
+  const lessonById={};LS.forEach(l=>lessonById[l.id]=l);
+  const nf=CFG.normFiles||{};
   return `<h1 style="font-size:clamp(24px,4vw,36px)">Нормативная база</h1>
   <p class="note">Иерархия на объекте: проект, прошедший экспертизу → действующие НТД РК (СН РК, СП РК) → межгосударственные ГОСТ, применяемые в РК → документация производителя (справочно, не основание для замечания, если не включена в проект). Статус и пункты проверяйте на <a href="https://prg.kz/" target="_blank" rel="noopener">prg.kz</a> и <a href="https://adilet.zan.kz/" target="_blank" rel="noopener">adilet.zan.kz</a>.</p>
   <div class="blk"><div class="tbl-wrap"><table class="nt"><tr><th>Документ</th><th>Наименование</th><th>Лекции</th></tr>
-  ${keys.map(k=>`<tr><td><span class="code">${esc(nm(k)[0])}</span></td><td>${esc(nm(k)[1])}</td><td>${[...(use[k]||[])].map(id=>`<a href="#/l/${id}">${id}</a>`).join(", ")||"—"}</td></tr>`).join("")}</table></div></div>`;
+  ${keys.map(k=>{
+    const f=nf[k];
+    const docCell=f?`<a href="${blobUrl(f.id)}" target="_blank" rel="noopener">${esc(nm(k)[0])}</a>`:`<span class="code">${esc(nm(k)[0])}</span>`;
+    const mentorCtl=isMentor()?`<div class="row no-print" style="margin-top:4px;gap:4px"><label class="btn sm">${f?"Заменить":"Прикрепить файл"}<input type="file" hidden class="nf-upload" data-nfkey="${esc(k)}"></label>${f?`<button class="btn sm" data-nfdel="${esc(k)}">Удалить</button>`:""}</div>`:"";
+    const lecCell=[...(use[k]||[])].map(id=>`<a href="#/l/${id}">${id}${lessonById[id]?". "+esc(lessonById[id].t):""}</a>`).join(", ")||"—";
+    return `<tr><td>${docCell}${f?`<div class="mut sm">${esc(f.name||"")}</div>`:""}${mentorCtl}</td><td>${esc(nm(k)[1])}</td><td>${lecCell}</td></tr>`;
+  }).join("")}</table></div></div>`;
 }
 function desPage(){
   const k=TR.des&&SEC.some(s=>s[0]===TR.des)?TR.des:SEC[0][0];
@@ -1547,6 +1555,18 @@ function bindPage(p,a,b,c){
   if(!p)bindHome();
   if(p==="trainer"){document.getElementById("trsec").onchange=e=>{TR.sec=e.target.value;trainerLoad()};document.getElementById("trnext").onclick=trainerLoad;trainerLoad()}
   if(p==="des"){document.getElementById("dessec").onchange=e=>{TR.des=e.target.value;render()};document.querySelectorAll("[data-copy]").forEach(bt=>bt.onclick=()=>{const l=LS.find(x=>x.id===bt.dataset.copy);copyText(plain(desText(l,st.desf||{},l.d.map(()=>true))),bt)})}
+  if(p==="norms"&&isMentor()){
+    app.querySelectorAll(".nf-upload").forEach(inp=>inp.onchange=async()=>{
+      const f=inp.files[0];if(!f)return;const k=inp.dataset.nfkey;
+      try{const r=await P.assets.upload(f);const normFiles=Object.assign({},CFG.normFiles,{[k]:{id:r.id,name:f.name,upd:now()}});await P.db.doc("cms/main").set(Object.assign({},CFG,{normFiles}))}
+      catch(e){uiAlert("Не удалось загрузить файл: нет прав на запись, либо файл слишком большой.")}
+    });
+    app.querySelectorAll("[data-nfdel]").forEach(bt=>bt.onclick=async()=>{
+      const k=bt.dataset.nfdel;if(!await uiConfirm("Удалить прикреплённый файл норматива?"))return;
+      const normFiles=Object.assign({},CFG.normFiles);delete normFiles[k];
+      try{await P.db.doc("cms/main").set(Object.assign({},CFG,{normFiles}))}catch(e){uiAlert("Нет прав на запись.")}
+    });
+  }
   if(p==="progress"){const pw=document.getElementById("pwchange");if(pw)pw.onclick=openPasswordModal}
   if(p==="exam"){
     const g=document.getElementById("exgo");if(g)g.onclick=examStart;
