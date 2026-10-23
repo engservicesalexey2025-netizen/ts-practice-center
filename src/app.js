@@ -437,7 +437,7 @@ function examStart(){
 
 /* ================= УРОК ПО ШАГАМ ================= */
 const STEP_T={look:"Посмотри",lec:"Конспект",vid:"Видео и материалы",task:"Найди дефект",ans:"Ответы",chk:"Чек-лист ТН",norm:"Норматив РК",rw:"Правильно / неправильно",des:"Замечание DES",quiz:"Блиц-тест"};
-const STEP_TAB={look:"main",lec:"lec",vid:"links",task:"defect",ans:"defect",chk:"check",norm:"norms",rw:"ok",des:"des",quiz:"quiz"};
+const STEP_TAB={look:"ok",lec:"lec",vid:"links",task:"defect",ans:"defect",chk:"check",norm:"norms",rw:"ok",des:"des",quiz:"quiz"};
 let PENDING_EXI=null;
 function exAll(l){return [{t:l.et,photo:l.photo||null,sc:l.sc,d:l.d||[],main:true},...(l.ex||[]).map(e=>({t:e.t,photo:e.photo||null,sc:e.sc||"conc",d:e.d||[]}))].map((e,i)=>Object.assign(e,{i,t:e.t||`Упражнение ${i+1}`}))}
 function exList(l){const a=exAll(l);return isMentor()?a:a.filter(e=>e.d.length)}
@@ -536,7 +536,7 @@ function lessonPage(id,stepK,sub){
   const head=`<h2><span>${si+1}</span>${esc(stTitle(l,k))}${k==="des"&&exAll(l).some(e=>e.d.length)?`<button class="btn sm" data-showtask="0" style="margin-left:10px">📷 Фото узла из «Найди дефект»</button>`:""}${M?`<button class="btn edit" data-ehead="${k}">✎ Изменить</button><a class="btn edit no-print" style="margin-left:auto" href="#/mentor/edit/${l.id}/${STEP_TAB[k]}">✎ Редактор шага</a>`:""}</h2>`;
   let body="";
   if(k==="look"){const links=effLnk(l);
-    body=`<div class="grid2"><figure>${cleanFig(l)}<figcaption>${esc(l.cap||(l.okPhoto?"Эталон с объекта — как должно быть":"Учебная схема узла — эталон без дефектов"))}</figcaption></figure>
+    body=`<div class="grid2"><figure>${cleanFig(l)}<figcaption>${esc(l.cap||(l.okPhoto?"Эталон с объекта — как должно быть":"Учебная схема узла — эталон без дефектов"))}</figcaption>${M?`<div class="row no-print" style="margin-top:6px"><a class="btn edit sm" href="#/mentor/edit/${l.id}/ok">✎ ${l.okPhoto?"Заменить фото":"Загрузить фото вместо схемы"}</a></div>`:""}</figure>
     <div><div class="tbl-wrap"><table class="src">
     <tr><th>Фото / видео</th><td>Показывают, как выполняется работа. Не являются основанием для замечания.</td></tr>
     <tr><th>Проект</th><td>${esc(l.p||"—")}</td></tr>
@@ -906,7 +906,7 @@ function bindHome(){
 /* ================= НАСТАВНИК ================= */
 const DFN={crack:"Трещина",honey:"Раковины",rust:"Ржавчина",gap:"Щель / разрыв",wire:"Проволока",puddle:"Вода",bubble:"Вздутие",sag:"Провис",debris:"Мусор",tilt:"Наклон",foam:"Пена",holes:"Отверстия",cable:"Кабель",flap:"Отклейка",wave:"Неровность",hole:"Проходка",joint:"Толстый шов",stain:"Пятно",bar:"Стержень",spacing:"Шаг стержней",bulge:"Выпучивание",chip:"Скол",burn:"Прожог"};
 const SCN={form:"Опалубка стен",slab:"Опалубка перекрытия",mesh:"Сетка армирования",cage:"Каркас колонны",conc:"Бетонная поверхность",pour:"Бетонирование",cubes:"Образцы бетона",wp:"Гидроизоляция подземной части",wet:"Санузел",roof:"Кровля",mason:"Кладка",win:"Окно",nvf:"Вентфасад",fin:"Отделка стены",floor:"Пол",mep:"Инженерные системы"};
-let ED=null,JR=null,FLASH="",EDQH=null,HQ_MARK=null;
+let ED=null,JR=null,FLASH="",EDQH=null,HQ_MARK=null,HQ_PHOTO=null;
 
 function mentorGate(){
   if(!P.dataReady)return `<div class="blk"><p>Подключение к базе практики…</p></div>`;
@@ -1226,16 +1226,18 @@ function hqObj(){
   const sel=document.getElementById("hqsc"),tsel=document.getElementById("hqtype");
   const sc=sel?sel.value:(EDQH>=0&&ED.qz[EDQH]?ED.qz[EDQH].sc:"conc")||"conc";
   const type=tsel?tsel.value:(HQ_MARK&&HQ_MARK.type)||"stain";
-  return{sc,photo:null,d:HQ_MARK?[[type,HQ_MARK.x,HQ_MARK.y,"",""]]:[]};
+  return{sc,photo:HQ_PHOTO,d:HQ_MARK?[[type,HQ_MARK.x,HQ_MARK.y,"",""]]:[]};
 }
 function hotspotEditorHTML(){
   const isNew=EDQH===-1;const q=!isNew&&ED.qz[EDQH]?ED.qz[EDQH]:null;
   if(HQ_MARK===null&&q&&q.d&&q.d[0])HQ_MARK={x:q.d[0][1],y:q.d[0][2],type:q.d[0][0]};
+  if(HQ_PHOTO===null&&q&&q.photo)HQ_PHOTO=q.photo;
+  const up=!!P.assets;
   return `<div class="blk"><h3 style="font-size:15px;margin-bottom:8px">${isNew?"Новый вопрос — клик по схеме":"Вопрос — клик по схеме"}</h3>
   <label class="form">Текст вопроса<textarea class="inp" rows="2" id="hqtext">${esc((q&&q.q)||"")}</textarea></label>
-  <div class="row" style="margin:8px 0"><label>Схема <select class="inp" id="hqsc">${Object.keys(SCN).map(k=>`<option value="${k}" ${((q&&q.sc)||"conc")===k?"selected":""}>${SCN[k]}</option>`).join("")}</select></label>
+  <div class="row" style="margin:8px 0;flex-wrap:wrap">${HQ_PHOTO?`<label class="btn ${up?"":"disabled"}">Заменить фото<input type="file" accept="image/*" hidden id="hqph" ${up?"":"disabled"}></label><button class="btn" id="hqphdel">Вернуться к учебной схеме</button>`:`<label>Схема <select class="inp" id="hqsc">${Object.keys(SCN).map(k=>`<option value="${k}" ${((q&&q.sc)||"conc")===k?"selected":""}>${SCN[k]}</option>`).join("")}</select></label><label class="btn ${up?"":"disabled"}">Загрузить фото с объекта<input type="file" accept="image/*" hidden id="hqph" ${up?"":"disabled"}></label>`}
   <label>Вид отметки <select class="inp" id="hqtype">${Object.keys(DFN).map(k=>`<option value="${k}" ${((HQ_MARK&&HQ_MARK.type)||"stain")===k?"selected":""}>${DFN[k]}</option>`).join("")}</select></label></div>
-  <p class="mut sm">Щёлкните по схеме, где должна быть отметка нарушения — повторный щелчок переставит её.</p>
+  <p class="mut sm">Щёлкните по ${HQ_PHOTO?"фото":"схеме"}, где должна быть отметка нарушения — повторный щелчок переставит её.</p>
   <div id="hqcanvas"></div>
   <div class="row" style="margin-top:10px"><button class="btn pri" id="hqsave">Сохранить вопрос</button><button class="btn" id="hqcancel">Отмена</button></div></div>`;
 }
@@ -1249,15 +1251,17 @@ function bindHotspotEditor(){
   hqCanvasDraw();
   const sc=document.getElementById("hqsc");if(sc)sc.onchange=hqCanvasDraw;
   const ty=document.getElementById("hqtype");if(ty)ty.onchange=hqCanvasDraw;
-  document.getElementById("hqcancel").onclick=()=>{EDQH=null;HQ_MARK=null;render()};
+  const ph=document.getElementById("hqph");if(ph)ph.onchange=async()=>{const f=ph.files[0];if(!f)return;const r=await uploadImg(f);if(!r)return;HQ_PHOTO=r;render()};
+  const phd=document.getElementById("hqphdel");if(phd)phd.onclick=()=>{HQ_PHOTO=null;render()};
+  document.getElementById("hqcancel").onclick=()=>{EDQH=null;HQ_MARK=null;HQ_PHOTO=null;render()};
   document.getElementById("hqsave").onclick=()=>{
     const qtext=document.getElementById("hqtext").value.trim();
     if(!qtext){uiAlert("Введите текст вопроса.");return}
-    if(!HQ_MARK){uiAlert("Щёлкните по схеме, чтобы поставить отметку.");return}
-    const sc=document.getElementById("hqsc").value;
-    const rule={type:"hotspot",q:qtext,sc,photo:null,d:[[HQ_MARK.type,HQ_MARK.x,HQ_MARK.y,"",""]]};
+    if(!HQ_MARK){uiAlert(`Щёлкните по ${HQ_PHOTO?"фото":"схеме"}, чтобы поставить отметку.`);return}
+    const sc=HQ_PHOTO?"conc":document.getElementById("hqsc").value;
+    const rule={type:"hotspot",q:qtext,sc,photo:HQ_PHOTO,d:[[HQ_MARK.type,HQ_MARK.x,HQ_MARK.y,"",""]]};
     ED.qz=ED.qz||[];if(EDQH===-1)ED.qz.push(rule);else ED.qz[EDQH]=rule;
-    EDQH=null;HQ_MARK=null;mark();render();
+    EDQH=null;HQ_MARK=null;HQ_PHOTO=null;mark();render();
   };
 }
 
@@ -1318,8 +1322,8 @@ function bindEditor(tab){
   on("[data-qdel]","click",async e=>{const i=+e.target.dataset.qdel;if(!await uiConfirm(`Удалить вопрос ${i+1}?`))return;ED.qz.splice(i,1);mark();render()});
   const qam=document.getElementById("qzaddmatch");if(qam)qam.onclick=()=>matchQModal(null);
   const qao=document.getElementById("qzaddorder");if(qao)qao.onclick=()=>orderQModal(null);
-  const qah=document.getElementById("qzaddhotspot");if(qah)qah.onclick=()=>{EDQH=-1;HQ_MARK=null;render()};
-  on("[data-qedit]","click",e=>{const i=+e.target.dataset.qedit,q=ED.qz[i];if(q.type==="match")matchQModal(i);else if(q.type==="order")orderQModal(i);else if(q.type==="hotspot"){EDQH=i;HQ_MARK=null;render()}});
+  const qah=document.getElementById("qzaddhotspot");if(qah)qah.onclick=()=>{EDQH=-1;HQ_MARK=null;HQ_PHOTO=null;render()};
+  on("[data-qedit]","click",e=>{const i=+e.target.dataset.qedit,q=ED.qz[i];if(q.type==="match")matchQModal(i);else if(q.type==="order")orderQModal(i);else if(q.type==="hotspot"){EDQH=i;HQ_MARK=null;HQ_PHOTO=null;render()}});
   // триггеры
   const tradd=document.getElementById("tradd");if(tradd)tradd.onclick=()=>trigModal(null);
   on("[data-tredit]","click",e=>trigModal(+e.target.dataset.tredit));
