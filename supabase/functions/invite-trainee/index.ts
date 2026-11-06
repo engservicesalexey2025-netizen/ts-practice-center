@@ -1,11 +1,11 @@
 // Edge Function: наставник приглашает нового абитуриента по e-mail.
 // Деплой: Supabase Dashboard -> Edge Functions -> New function -> вставить этот код
 // (так же, как notify-assignment).
-// Секреты функции (Dashboard -> Edge Functions -> Secrets): RESEND_API_KEY
-// (уже настроен для notify-assignment — используется и здесь), NOTIFY_FROM_EMAIL
-// (опционально). SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
-// подставляются автоматически.
+// Секреты функции (Dashboard -> Edge Functions -> Secrets): SMTP_USERNAME, SMTP_PASSWORD
+// (Gmail App Password), SMTP_FROM — те же, что и у notify-assignment. SUPABASE_URL /
+// SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY подставляются автоматически.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import nodemailer from "npm:nodemailer@^9";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,11 +25,18 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const resendKey = Deno.env.get("RESEND_API_KEY");
-    const fromEmail = Deno.env.get("NOTIFY_FROM_EMAIL") || "onboarding@resend.dev";
-    if (!resendKey) {
-      return new Response(JSON.stringify({ error: "RESEND_API_KEY не настроен в секретах функции" }), { status: 500, headers: corsHeaders });
+    const smtpUser = Deno.env.get("SMTP_USERNAME");
+    const smtpPass = Deno.env.get("SMTP_PASSWORD");
+    const fromEmail = Deno.env.get("SMTP_FROM") || smtpUser || "";
+    if (!smtpUser || !smtpPass) {
+      return new Response(JSON.stringify({ error: "SMTP не настроен в секретах функции" }), { status: 500, headers: corsHeaders });
     }
+    const transport = nodemailer.createTransport({
+      host: Deno.env.get("SMTP_HOSTNAME") || "smtp.gmail.com",
+      port: Number(Deno.env.get("SMTP_PORT") || 465),
+      secure: true,
+      auth: { user: smtpUser, pass: smtpPass },
+    });
 
     const authHeader = req.headers.get("Authorization") || "";
     const callerClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
@@ -74,13 +81,10 @@ Deno.serve(async (req) => {
       <p>После входа заполните короткую анкету (ФИО, специальность, уровень) — после этого вы появитесь в журнале обучения.</p>`;
 
     try {
-      const r = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: fromEmail, to: emailTrim, subject, html })
-      });
-      return new Response(JSON.stringify({ ok: r.ok, status: r.status, mode }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      await transport.sendMail({ from: fromEmail, to: emailTrim, subject, html });
+      return new Response(JSON.stringify({ ok: true, status: 200, mode }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     } catch (e) {
+      console.error("smtp error", e);
       return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: corsHeaders });
     }
   } catch (e) {
