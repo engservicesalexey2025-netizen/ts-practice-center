@@ -102,8 +102,8 @@ export async function getProfileEmails(uids) {
   return data || [];
 }
 
-export async function notifyAssignment({ uids, category, siteUrl }) {
-  const { data, error } = await supabase.functions.invoke("notify-assignment", { body: { uids, category, siteUrl } });
+export async function notifyAssignment({ uids, category, siteUrl, kind }) {
+  const { data, error } = await supabase.functions.invoke("notify-assignment", { body: { uids, category, siteUrl, kind } });
   if (error) throw wrapError(error);
   return data;
 }

@@ -157,6 +157,7 @@ const blank=()=>({prof:null,lp:{},ex:[],tr:{n:0,hit:0,tot:0},chk:{},desf:{},exam
 let st=blank();
 try{const r=localStorage.getItem(KEY);if(r)st=Object.assign(blank(),JSON.parse(r))}catch(e){}
 let saveT=null,saving=false,saveAgain=false;
+let scrollGateFn=null;
 function save(){try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}if(P.db&&P.uid){clearTimeout(saveT);saveT=setTimeout(flush,700)}}
 async function flush(){
   if(saving){saveAgain=true;return}saving=true;
@@ -487,9 +488,28 @@ function evalTriggers(l,x,ev){
   });
 }
 
+function vidOK(l,x){const vs=effVids(l);return !vs.length||vs.every((v,j)=>x.vcl&&x.vcl[j])}
+function chkOK(l){return !l.c.length||l.c.every((c,j)=>(st.chk[l.id]||[])[j])}
+function desOK(l,x){return !l.d.length||!!x.dp}
+function scrollOK(x,k){return !!(x.sb&&x.sb[k])}
+// Требование «шаг реально выполнен» (не просто открыт) — используется и для блокировки
+// перехода дальше (stepOpen/defaultStep/nextOpen), и для иконки ✓ в навигации шагов.
+function stepReqOK(l,x,p){
+  if(p==="task")return taskOK(l,x);
+  if(p==="chk")return chkOK(l);
+  if(p==="des")return desOK(l,x);
+  if(p==="vid")return vidOK(l,x);
+  if(p==="look"||p==="norm")return scrollOK(x,p);
+  return true;
+}
+function unlockNextIfReady(l,x,k){
+  if(!stepReqOK(l,x,k))return;
+  const w=document.getElementById("nextwait");
+  if(w){const a=document.createElement("a");a.className="btn dark";a.id="nextstep";a.href=w.dataset.href;a.textContent=w.dataset.t;w.replaceWith(a)}
+}
 function stepOpen(l,x,k){if(isMentor())return true;const s=lessonSteps(l),i=s.indexOf(k);if(i<0)return false;
-  for(let j=0;j<i;j++){const p=s[j];if(!(x.v&&x.v[p])&&!(x.skip&&x.skip[p]))return false;if(p==="task"&&!taskOK(l,x)&&!(x.skip&&x.skip[p]))return false}return true}
-function defaultStep(l,x){const s=lessonSteps(l);if(x.p)return s[0];for(const k of s){if(!(x.v&&x.v[k])&&!(x.skip&&x.skip[k]))return stepOpen(l,x,k)?k:s[0];if(k==="task"&&!taskOK(l,x)&&!(x.skip&&x.skip.task))return"task";if(k==="des"&&!x.dp&&l.d.length&&!(x.skip&&x.skip.des))return"des"}return"quiz"}
+  for(let j=0;j<i;j++){const p=s[j];if(!(x.v&&x.v[p])&&!(x.skip&&x.skip[p]))return false;if(!stepReqOK(l,x,p)&&!(x.skip&&x.skip[p]))return false}return true}
+function defaultStep(l,x){const s=lessonSteps(l);if(x.p)return s[0];for(const k of s){if(!(x.v&&x.v[k])&&!(x.skip&&x.skip[k]))return stepOpen(l,x,k)?k:s[0];if(!stepReqOK(l,x,k)&&!(x.skip&&x.skip[k]))return k}return"quiz"}
 const secMastered=k=>secCnt(k)>0&&secDone(k)===secCnt(k);
 
 /* ----- быстрые правки наставника ----- */
@@ -531,7 +551,7 @@ function lessonPage(id,stepK,sub){
   const x=lp(l.id),S=lessonSteps(l);let k=S.includes(stepK)?stepK:defaultStep(l,x);
   if(!stepOpen(l,x,k))k=defaultStep(l,x);x.v=x.v||{};if(!x.o)x.o=now();if(!x.v[k])x.v[k]=now();
   const i=LS.indexOf(l),nextL=LS[i+1],si=S.indexOf(k),nx=needs(l,x),M=isMentor();
-  const stIcon=s=>s==="task"?(x.fall?"✓":""):s==="des"?(x.dp?"✓":""):s==="quiz"?(nx.quiz?"✓":""):(x.v&&x.v[s]?"✓":"");
+  const stIcon=s=>s==="task"?(x.fall?"✓":""):s==="des"?(x.dp?"✓":""):s==="quiz"?(nx.quiz?"✓":""):(x.v&&x.v[s]&&stepReqOK(l,x,s)?"✓":"");
   const intro=l.sti&&l.sti[k]?`<div class="step-intro">${textBlock(l.sti[k])}</div>`:"";
   const head=`<h2><span>${si+1}</span>${esc(stTitle(l,k))}${k==="des"&&exAll(l).some(e=>e.d.length)?`<button class="btn sm" data-showtask="0" style="margin-left:10px">📷 Фото узла из «Найди дефект»</button>`:""}${M?`<button class="btn edit" data-ehead="${k}">✎ Изменить</button><a class="btn edit no-print" style="margin-left:auto" href="#/mentor/edit/${l.id}/${STEP_TAB[k]}">✎ Редактор шага</a>`:""}</h2>`;
   let body="";
@@ -546,8 +566,8 @@ function lessonPage(id,stepK,sub){
     ${l.notes?`<div class="mentor-note">${M?`<div class="lec-tools no-print"><button class="btn edit sm" data-lk="notes">✎ Изменить</button><button class="btn sm" data-lk="delnotes">Удалить блок</button></div>`:""}<b>Наставник: на что обратить внимание</b><div>${textBlock(l.notes)}</div></div>`:(M?`<p class="no-print"><button class="btn edit" data-lk="notes">＋ Подсказка наставника</button></p>`:"")}
     ${l.gal.length?`<h3 style="font-size:15px;margin:16px 0 8px">Фото-примеры с объектов${M?` <button class="btn sm no-print" data-lk="delgal">Удалить блок</button>`:""}</h3><div class="gal">${l.gal.map((g,j)=>`<figure><img src="${blobUrl(g.id)}" alt="${esc(g.cap||"Фото с объекта")}" data-z="1" loading="lazy"><figcaption>${esc(g.cap||"")}</figcaption>${M?`<button class="btn sm no-print" data-lk="delg:${j}">Удалить фото</button>`:""}</figure>`).join("")}</div>`:""}`}
   if(k==="lec")body=lecView(l);
-  if(k==="vid"){const vs=effVids(l);body=`<div class="vids">${vs.map((v,j)=>`<div class="vidw">${M?`<button class="btn edit sm" data-evid="${j}">✎ Изменить</button>`:""}<a class="vid" target="_blank" rel="noopener" href="${esc(v[1])}"><span class="pl"></span><span><b>${esc(v[0]||"Видео")}</b><small>${esc(host(v[1]))}</small></span></a></div>`).join("")}${M?`<div class="vidw"><button class="btn edit" data-evid="-1">＋ Видео</button></div>`:""}</div>${vs.length?"":`<p class="mut">Видео для этой лекции не назначены.</p>`}
-    <p class="note">Если в видео сделано иначе, чем в проекте, — на объекте действует проект и НТД РК.</p>`}
+  if(k==="vid"){const vs=effVids(l);body=`<div class="vids">${vs.map((v,j)=>`<div class="vidw">${M?`<button class="btn edit sm" data-evid="${j}">✎ Изменить</button>`:""}<a class="vid" data-vididx="${j}" target="_blank" rel="noopener" href="${esc(v[1])}"><span class="pl"></span><span><b>${esc(v[0]||"Видео")}</b><small>${esc(host(v[1]))}</small></span></a>${M?"":`<span class="pill sm ${x.vcl&&x.vcl[j]?"ok":""}" id="vidbadge-${j}" style="margin-left:8px">${x.vcl&&x.vcl[j]?"Открыто ✓":"Не открыто"}</span>`}</div>`).join("")}${M?`<div class="vidw"><button class="btn edit" data-evid="-1">＋ Видео</button></div>`:""}</div>${vs.length?"":`<p class="mut">Видео для этой лекции не назначены.</p>`}
+    <p class="note">Если в видео сделано иначе, чем в проекте, — на объекте действует проект и НТД РК.</p>${!M&&vs.length?`<p class="mut sm" id="vidcount">Открыто видео: ${vs.filter((v,j)=>x.vcl&&x.vcl[j]).length} из ${vs.length}.</p>`:""}`}
   if(k==="task"){const E=exList(l),es=exSt(x);let ci=E.findIndex(e=>String(e.i)===String(sub));if(ci<0){ci=E.findIndex(e=>!(es.fx[e.i]||es.sx[e.i]));if(ci<0)ci=0}const ex=E[ci],nx2=E[ci+1];
     const ef=(x.ef||{})[ex.i],tries=(x.efa||{})[ex.i]||0;
     body=`${E.length>1||M?`<nav class="extabs no-print">${E.map((e,j)=>`<a href="#/l/${l.id}/task/${e.i}" class="${j===ci?"on":""}">${j+1}. ${esc(e.t)}${es.fx[e.i]?" ✓":es.sx[e.i]?" (ответы)":""}${M&&!e.d.length?" — нет отметок":""}</a>`).join("")}${M?`<button class="btn edit sm" data-exadd>＋ Упражнение</button>`:""}</nav>`:""}
@@ -572,14 +592,15 @@ function lessonPage(id,stepK,sub){
     <div id="desref" class="hidden"><h3 style="font-size:15px;margin:16px 0 8px">Эталонное замечание</h3><div class="des-pre" id="despre"></div><button class="btn pri" id="copydes">Копировать замечание</button></div>`:`<p class="mut">Для этой лекции дефекты не размечены.</p>`;
   if(k==="quiz")body=`<div id="quiz"></div><div class="row" style="margin-top:12px"><button class="btn pri" id="qsub">Проверить ответы</button><button class="btn" id="qnew">Новый вариант</button></div>
     <div class="res ${x.q!=null?"":"hidden"}" id="qres">${x.q!=null?`Лучший результат: ${x.q}% (${fd(x.qd)}).`:""}</div>`;
-  const prevK=S[si-1],nextK=S[si+1],nextOpen=nextK&&(M||(k==="task"?taskOK(l,x):true));
+  const prevK=S[si-1],nextK=S[si+1],nextOpen=nextK&&(M||stepReqOK(l,x,k));
+  const waitMsg={task:"Найдите все дефекты или откройте ответы, чтобы перейти дальше",chk:"Отметьте все пункты чек-листа, чтобы перейти дальше",des:"Составьте замечание DES верно, чтобы перейти дальше",vid:"Откройте все видео из списка, чтобы перейти дальше",look:"Долистайте материал до конца, чтобы перейти дальше",norm:"Долистайте норматив до конца, чтобы перейти дальше"}[k]||"Выполните шаг до конца, чтобы перейти дальше";
   return `<div class="crumbs"><a href="#/">Разделы</a> / <a href="#/s/${l.s}">${esc(secName(l.s))}</a> / Лекция ${l.id}</div>
   ${M?`<div class="mbar no-print">Режим наставника: жёлтые кнопки «Изменить» видите только вы. Абитуриенты видят готовый результат.${l.hidden?" Лекция скрыта от абитуриентов.":""} <a class="btn pri" href="#/mentor/edit/${l.id}/main">Полный редактор лекции</a></div>`:""}
   <header class="lhead"><div class="lnum">${l.id}</div><div><h1>${esc(l.t)}</h1><div class="lstat sm"><span class="${nx.vis?"ok":""}">Шаги ${S.filter(s=>x.v&&x.v[s]).length}/${S.length}</span>${l.d.length?`<span class="${x.fall?"ok":""}">Найди дефект ${x.fall?"✓":"—"}</span><span class="${x.dp?"ok":""}">DES ${x.dp?"✓":"—"}</span>`:""}<span class="${nx.quiz?"ok":""}">Тест ${x.q!=null?x.q+"%":"—"}</span>${x.p?`<span class="pill ok">Лекция освоен ${fdd(x.p)}</span>`:""}</div></div></header>
   <nav class="tabs no-print" aria-label="Шаги лекции">${S.map((s,j)=>{const op=stepOpen(l,x,s);return op?`<a href="#/l/${l.id}/${s}" class="${s===k?"on":""}"><b>${j+1}</b>${esc(stTitle(l,s))}<i>${stIcon(s)}</i></a>`:`<span class="off" title="Откроется после предыдущих шагов"><b>${j+1}</b>${esc(stTitle(l,s))}<i>🔒</i></span>`}).join("")}</nav>
   <section class="blk step" id="b-${k}">${head}${intro}${body}</section>
   <div class="pager no-print">${prevK?`<a class="btn" href="#/l/${l.id}/${prevK}">← ${esc(stTitle(l,prevK))}</a>`:"<span></span>"}
-  ${nextK?(nextOpen?`<a class="btn dark" id="nextstep" href="#/l/${l.id}/${nextK}">${esc(stTitle(l,nextK))} →</a>`:`<span class="mut sm" id="nextwait" data-href="#/l/${l.id}/${nextK}" data-t="${esc(stTitle(l,nextK))} →">Найдите все дефекты или откройте ответы, чтобы перейти дальше</span>`):(nextL&&x.p?`<a class="btn dark" href="#/l/${nextL.id}">Следующая лекция: ${nextL.id} →</a>`:`<a class="btn" href="#/s/${l.s}">К разделу</a>`)}</div>`;
+  ${nextK?(nextOpen?`<a class="btn dark" id="nextstep" href="#/l/${l.id}/${nextK}">${esc(stTitle(l,nextK))} →</a>`:`<span class="mut sm" id="nextwait" data-href="#/l/${l.id}/${nextK}" data-t="${esc(stTitle(l,nextK))} →">${waitMsg}</span>`):(nextL&&x.p?`<a class="btn dark" href="#/l/${nextL.id}">Следующая лекция: ${nextL.id} →</a>`:`<a class="btn" href="#/s/${l.s}">К разделу</a>`)}</div>`;
 }
 
 function bindLesson(l,k,sub){
@@ -596,10 +617,31 @@ function bindLesson(l,k,sub){
   }catch(e){uiAlert("Не сохранено: нет прав на запись (нужна роль «Наставник»).")}});
   app.querySelectorAll("[data-elnk]").forEach(b=>b.onclick=()=>editLink(l,"l",+b.dataset.elnk));
   app.querySelectorAll("[data-evid]").forEach(b=>b.onclick=()=>editLink(l,"v",+b.dataset.evid));
+  if(k==="vid"&&!isMentor()){
+    app.querySelectorAll("a[data-vididx]").forEach(aEl=>aEl.addEventListener("click",()=>{
+      const j=+aEl.dataset.vididx;x.vcl=x.vcl||{};if(x.vcl[j])return;x.vcl[j]=now();save();
+      const b=document.getElementById("vidbadge-"+j);if(b){b.textContent="Открыто ✓";b.classList.add("ok")}
+      const vs=effVids(l),cEl=document.getElementById("vidcount");if(cEl)cEl.textContent=`Открыто видео: ${vs.filter((v,jj)=>x.vcl&&x.vcl[jj]).length} из ${vs.length}.`;
+      unlockNextIfReady(l,x,"vid")
+    }));
+  }
+  if(scrollGateFn){window.removeEventListener("scroll",scrollGateFn);scrollGateFn=null}
+  if((k==="look"||k==="norm")&&!isMentor()&&!(x.sb&&x.sb[k])){
+    scrollGateFn=()=>{
+      const scrollable=document.documentElement.scrollHeight-window.innerHeight;
+      if(scrollable<=24||window.scrollY>=scrollable-24){
+        x.sb=x.sb||{};x.sb[k]=now();save();
+        window.removeEventListener("scroll",scrollGateFn);scrollGateFn=null;
+        unlockNextIfReady(l,x,k)
+      }
+    };
+    window.addEventListener("scroll",scrollGateFn,{passive:true});
+    scrollGateFn();
+  }
   const tk=document.getElementById("task");
   if(tk){const ei=+tk.closest(".task-wrap").dataset.ex,ex=exAll(l)[ei],F=finder(tk,ex),res=document.getElementById("fres"),gu=document.getElementById("giveup");
     const showAns=()=>{document.getElementById("anslist").classList.remove("hidden");const ne=document.getElementById("nextex");if(ne)ne.classList.remove("hidden");
-      if(taskOK(l,x)){const w=document.getElementById("nextwait");if(w){const a=document.createElement("a");a.className="btn dark";a.id="nextstep";a.href=w.dataset.href;a.textContent=w.dataset.t;w.replaceWith(a)}}};
+      unlockNextIfReady(l,x,"task")};
     document.getElementById("chkbtn").onclick=e=>{if(e.target.disabled)return;const r=F.check(false);e.target.disabled=true;
       x.ef=Object.assign({},x.ef,{[ei]:[r.hit,r.tot,now()]});x.efa=Object.assign({},x.efa,{[ei]:((x.efa||{})[ei]||0)+1});x.f=[r.hit,r.tot,now()];x.fa=(x.fa||0)+1;st.tr.n++;st.tr.hit+=r.hit;st.tr.tot+=r.tot;res.classList.remove("hidden");
       if(r.all){const s=exSt(x);x.fx=Object.assign({},s.fx);if(!x.fx[ei])x.fx[ei]=now();x.sx=Object.assign({},s.sx);const newlyTaskDone=taskDone(l,x)&&!x.fall;if(newlyTaskDone)x.fall=now();if(newlyTaskDone)evalTriggers(l,x,{step:"task",event:"pass"});tryPass(l,x);save();dirty=false;
@@ -614,14 +656,14 @@ function bindLesson(l,k,sub){
     app.querySelectorAll("[data-exedit]").forEach(b=>b.onclick=()=>{PENDING_EXI=+b.dataset.exedit;ED=null;location.hash=`#/mentor/edit/${l.id}/defect`});
     app.querySelectorAll("[data-exdel]").forEach(b=>b.onclick=async()=>{const ei=+b.dataset.exdel;if(!await uiConfirm(`Удалить упражнение ${ei+1} вместе с фото и отметками?`))return;try{await quickSave(l,d=>{d.ex.splice(ei-1,1)});location.hash=`#/l/${l.id}/task`}catch(e){uiAlert("Не сохранено: нет прав на запись.")}});
   }
-  const ch=document.getElementById("chk");if(ch)ch.addEventListener("change",e=>{const j=+e.target.dataset.k;const a=st.chk[l.id]||[];a[j]=e.target.checked;st.chk[l.id]=a;save()});
+  const ch=document.getElementById("chk");if(ch)ch.addEventListener("change",e=>{const j=+e.target.dataset.k;const a=st.chk[l.id]||[];a[j]=e.target.checked;st.chk[l.id]=a;save();unlockNextIfReady(l,x,"chk")});
   app.querySelectorAll("h2 [data-showtask]").forEach(b=>b.onclick=()=>showTaskPhoto(l,+b.dataset.showtask));
   const db2=document.getElementById("desbox");
   if(db2){let seed=x.dv||0,T;const f={};
     const check=()=>{const el=document.getElementById("dres");el.classList.remove("hidden");
       if(!(f.obj||"").trim()||!(f.ax||"").trim()){el.textContent="Заполните привязку: «Выберите проект» и «Ось» — без неё замечание в DES не принимается. Примеры указаны под полями.";el.style.color="var(--bad)";el.scrollIntoView({behavior:"smooth",block:"center"});return}
       const g=gradeDes(db2,T);x.da=(x.da||0)+1;el.style.color="";
-      if(g.all){const newlyDes=!x.dp;if(newlyDes)x.dp=now();if(newlyDes)evalTriggers(l,x,{step:"des",event:"pass"});const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Лекция освоена!":""} Ниже — эталонный текст для DES.`}
+      if(g.all){const newlyDes=!x.dp;if(newlyDes)x.dp=now();if(newlyDes)evalTriggers(l,x,{step:"des",event:"pass"});const passed=tryPass(l,x);el.innerHTML=`Замечание создано верно.${passed?" Лекция освоена!":""} Ниже — эталонный текст для DES.`;unlockNextIfReady(l,x,"des")}
       else el.textContent=`Есть ошибки в полях: ${Object.keys(g.res).filter(z=>!g.res[z]).map(z=>({defs:"Комментарий",norms:"Норматив",whys:"Причина",acts:"Действия"})[z]).join(", ")}. Зелёным отмечены правильные варианты. Нажмите «Отмена», чтобы попробовать снова.`;
       save();dirty=false;document.getElementById("dsub").disabled=true;
       const ref=document.getElementById("desref");ref.classList.remove("hidden");const sel=l.d.map(()=>true);document.getElementById("despre").innerHTML=desText(l,f,sel);document.getElementById("copydes").onclick=e=>copyText(plain(desText(l,f,sel)),e.target);el.scrollIntoView({behavior:"smooth",block:"center"})};
@@ -1361,6 +1403,14 @@ async function loadJournal(){
   if(location.hash.startsWith("#/mentor/journal")||location.hash.startsWith("#/mentor/t/"))render();
 }
 const retakeOf=uid=>(JR&&JR.retake&&JR.retake[uid]&&JR.retake[uid].date)||"";
+async function remindExam(uid,msgEl){
+  if(msgEl)msgEl.textContent="Отправляю напоминание…";
+  try{
+    const r=await notifyAssignment({uids:[uid],category:"Аттестация ТН",siteUrl:SITE_URL,kind:"remind"});
+    const ok=(r&&r.results||[]).some(x=>x.ok);
+    if(msgEl)msgEl.textContent=ok?"Напоминание отправлено.":"Письмо не отправлено.";
+  }catch(e){if(msgEl)msgEl.textContent="Не отправлено: функция уведомлений ещё не настроена."}
+}
 async function setRetakeDate(uid,date,msgEl){
   try{await P.db.doc("cms/main/examRetake/"+uid).set({date:date||null,upd:now(),by:P.uid||""});JR.retake[uid]={date:date||null};if(msgEl)msgEl.textContent=date?"Дата пересдачи назначена: "+fdd(date):"Дата пересдачи снята.";return true}
   catch(e){if(msgEl)msgEl.textContent="Не сохранено: нет прав на запись.";return false}
@@ -1424,10 +1474,13 @@ function traineePage(uid){
   <div class="blk no-print"><h2 style="font-size:16px;margin-bottom:8px">Доступ к разделам</h2><p class="mut sm">Отмеченные разделы абитуриент видит на экране и может проходить.</p>
   <div class="chk">${SEC.map(sc=>`<label><input type="checkbox" class="accb" data-u="${esc(uid)}" data-s="${sc[0]}" ${accOf(uid).includes(sc[0])?"checked":""}><span>${sc[0]}. ${esc(sc[1])}</span></label>`).join("")}</div>
   <div class="row" style="margin-top:8px"><button class="btn sm" data-accall="${esc(uid)}">Открыть все</button><button class="btn sm" data-accnone="${esc(uid)}">Закрыть все</button><span class="sm" id="accmsg"></span></div></div>
-  ${(r.ex||[]).length?`<div class="blk"><h2 style="font-size:16px">Аттестации</h2>
-  <p class="mut sm">После каждой аттестации повторное прохождение заблокировано, пока вы не назначите дату пересдачи.</p>
+  <div class="blk"><h2 style="font-size:16px">Аттестации</h2>
+  ${(r.ex||[]).length?`<p class="mut sm">После каждой аттестации повторное прохождение заблокировано, пока вы не назначите дату пересдачи.</p>
   <div class="row no-print"><label>Дата пересдачи<input type="date" class="inp" id="retakedate" value="${esc(retakeOf(uid))}"></label><button class="btn pri" id="retakesave" data-u="${esc(uid)}">Назначить</button><span class="sm" id="retakemsg">${retakeOf(uid)?"Назначено: "+fdd(retakeOf(uid)):"Не назначено — повторный допуск закрыт"}</span></div>
-  <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=passPct()?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div></div>`:""}
+  <div class="tbl-wrap"><table class="nt"><tr><th>Дата</th><th>Разделы</th><th>Результат</th></tr>${r.ex.slice().reverse().map(e=>`<tr><td>${fd(e.date)}</td><td>${esc(e.secs)}</td><td><span class="pill ${e.pc>=passPct()?"ok":"no"}">${e.pc}% · ${e.ok}/${e.n}</span></td></tr>`).join("")}</table></div>`
+  :`<p class="mut sm">Абитуриент ещё не проходил аттестацию ни разу.</p>
+  <div class="row no-print"><button class="btn" id="remindgo" data-u="${esc(uid)}">Напомнить о прохождении</button><span class="sm" id="remindmsg"></span></div>`}
+  </div>
   ${firedRows.length||varsEntries.length?`<div class="blk"><h2 style="font-size:16px">Триггеры и переменные</h2>
   ${varsEntries.length?`<p class="mut sm">Переменные: ${varsEntries.map(([k,v])=>`«${esc((varDecl(k)||{label:k}).label||k)}» = ${esc(String(v))}`).join(", ")}</p>`:""}
   ${firedRows.length?`<div class="tbl-wrap"><table class="nt"><tr><th>Лекция</th><th>Триггер</th><th>Когда сработал</th></tr>${firedRows.map(fr=>`<tr><td>${fr.lesson.id}. ${esc(fr.lesson.t)}</td><td>${esc(fr.name)}</td><td>${fd(fr.at)}</td></tr>`).join("")}</table></div>`:`<p class="mut sm">Пока ни один триггер не сработал.</p>`}</div>`:""}
@@ -1442,6 +1495,7 @@ async function journalCsv(btn){
 
 /* ================= МАРШРУТИЗАЦИЯ ================= */
 function render(){
+  if(scrollGateFn){window.removeEventListener("scroll",scrollGateFn);scrollGateFn=null}
   const top=document.querySelector(".top"),foot=document.querySelector("footer"),signout=document.getElementById("signout");
   if(!P.ready){if(top)top.classList.add("hidden");if(foot)foot.classList.add("hidden");app.innerHTML=`<div class="blk"><p>Загрузка…</p></div>`;return}
   if(!P.authed){if(top)top.classList.add("hidden");if(foot)foot.classList.add("hidden");app.innerHTML="";mountLoginScreen(app);return}
@@ -1532,6 +1586,7 @@ function bindPage(p,a,b,c){
     app.querySelectorAll("[data-accall],[data-accnone]").forEach(bt=>bt.onclick=()=>{const uid=bt.dataset.accall||bt.dataset.accnone,on=!!bt.dataset.accall;app.querySelectorAll(`.accb[data-u="${CSS.escape(uid)}"]`).forEach(x=>x.checked=on);accSave(uid,document.getElementById("accmsg"))});
     app.querySelectorAll("[data-jv]").forEach(bt=>bt.onclick=()=>{JR.view=bt.dataset.jv;render()});
     const rts=document.getElementById("retakesave");if(rts)rts.onclick=async()=>{const uid=rts.dataset.u,val=document.getElementById("retakedate").value;await setRetakeDate(uid,val||null,document.getElementById("retakemsg"))};
+    const rg=document.getElementById("remindgo");if(rg)rg.onclick=async()=>{await remindExam(rg.dataset.u,document.getElementById("remindmsg"))};
     app.querySelectorAll('input[name="accdef"]').forEach(r=>r.onchange=async()=>{try{await P.db.doc("cms/main").set(Object.assign({},CFG,{accDef:r.value}));FLASH="Настройка доступа сохранена."}catch(e){uiAlert("Нет прав на запись.")}});
     if(a==="journal"&&JR&&!JR.loading){const jq=document.getElementById("jq");jq.oninput=()=>{JR.q=jq.value;const pos=jq.selectionStart;render();const n=document.getElementById("jq");n.focus();n.setSelectionRange(pos,pos)};document.getElementById("jre").onclick=()=>{JR=null;render()};const c=document.getElementById("jcsv");if(c)c.onclick=()=>journalCsv(c)
       const ag=document.getElementById("asggo");if(ag)ag.onclick=async()=>{

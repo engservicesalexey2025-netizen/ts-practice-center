@@ -7,11 +7,19 @@
 // подставляются автоматически.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
   try {
     const { email, fio, siteUrl } = await req.json();
     if (!email || !String(email).trim()) {
-      return new Response(JSON.stringify({ error: "email обязателен" }), { status: 400 });
+      return new Response(JSON.stringify({ error: "email обязателен" }), { status: 400, headers: corsHeaders });
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -20,20 +28,20 @@ Deno.serve(async (req) => {
     const resendKey = Deno.env.get("RESEND_API_KEY");
     const fromEmail = Deno.env.get("NOTIFY_FROM_EMAIL") || "onboarding@resend.dev";
     if (!resendKey) {
-      return new Response(JSON.stringify({ error: "RESEND_API_KEY не настроен в секретах функции" }), { status: 500 });
+      return new Response(JSON.stringify({ error: "RESEND_API_KEY не настроен в секретах функции" }), { status: 500, headers: corsHeaders });
     }
 
     const authHeader = req.headers.get("Authorization") || "";
     const callerClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
     const { data: userData } = await callerClient.auth.getUser();
     if (!userData || !userData.user) {
-      return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+      return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: corsHeaders });
     }
 
     const admin = createClient(supabaseUrl, serviceKey);
     const { data: callerProfile } = await admin.from("profiles").select("role").eq("id", userData.user.id).maybeSingle();
     if (!callerProfile || !["owner", "mentor"].includes(callerProfile.role)) {
-      return new Response(JSON.stringify({ error: "forbidden: нужна роль наставника" }), { status: 403 });
+      return new Response(JSON.stringify({ error: "forbidden: нужна роль наставника" }), { status: 403, headers: corsHeaders });
     }
 
     const emailTrim = String(email).trim();
@@ -54,9 +62,9 @@ Deno.serve(async (req) => {
       mode = "magiclink";
       const r = await admin.auth.admin.generateLink({ type: "magiclink", email: emailTrim, options: { redirectTo: siteUrl } });
       link = r.data && r.data.properties && r.data.properties.action_link;
-      if (r.error) return new Response(JSON.stringify({ error: r.error.message }), { status: 500 });
+      if (r.error) return new Response(JSON.stringify({ error: r.error.message }), { status: 500, headers: corsHeaders });
     }
-    if (!link) return new Response(JSON.stringify({ error: "Не удалось сформировать ссылку приглашения." }), { status: 500 });
+    if (!link) return new Response(JSON.stringify({ error: "Не удалось сформировать ссылку приглашения." }), { status: 500, headers: corsHeaders });
 
     const greet = fio ? String(fio).trim() : "";
     const subject = mode === "invite" ? "Приглашение в Центр «Практика ТН»" : "Ссылка для входа в Центр «Практика ТН»";
@@ -71,11 +79,11 @@ Deno.serve(async (req) => {
         headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ from: fromEmail, to: emailTrim, subject, html })
       });
-      return new Response(JSON.stringify({ ok: r.ok, status: r.status, mode }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ ok: r.ok, status: r.status, mode }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     } catch (e) {
-      return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+      return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: corsHeaders });
     }
   } catch (e) {
-    return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+    return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: corsHeaders });
   }
 });
